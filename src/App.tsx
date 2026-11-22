@@ -76,7 +76,6 @@ import {
   exportArcGisProPackage,
   importArcGisDataFile,
 } from './utils/arcgisExport';
-import { exportArcGisProAprxFile } from './utils/aprxBuilder';
 import { A1SheetDrawing } from './components/A1SheetDrawing';
 import { ShaftEditorPanel } from './components/ShaftEditorPanel';
 import { WbEditorPanel } from './components/WbWcEditors';
@@ -461,7 +460,7 @@ export function App() {
   };
 
   const handleExport = async (
-    kind: 'pdf' | 'png' | 'svg' | 'dxf' | 'xlsx' | 'json' | 'arcgis' | 'aprx' | 'print',
+    kind: 'pdf' | 'png' | 'svg' | 'dxf' | 'xlsx' | 'json' | 'arcgis' | 'print',
     customSvg?: SVGSVGElement | null,
     customLabel?: string
   ) => {
@@ -471,16 +470,6 @@ export function App() {
     try {
       if (kind === 'print') {
         window.print();
-        return;
-      }
-      if (kind === 'aprx') {
-        setExportBusy(isBn ? 'ArcGIS Pro (.aprx) তৈরি হচ্ছে...' : 'Building ArcGIS Pro (.aprx)...');
-        await exportArcGisProAprxFile(state);
-        showToast(
-          isBn
-            ? 'ArcGIS Pro 3.5.0 প্রজেক্ট (.aprx — WA+WB+WC ৩-ম্যাপ লেআউট) ডাউনলোড হয়েছে!'
-            : 'ArcGIS Pro Project (.aprx — WA+WB+WC in 1 Layout) exported!'
-        );
         return;
       }
       if (kind === 'arcgis') {
@@ -999,12 +988,6 @@ export function App() {
                   <div className="px-3 py-1 text-[10px] font-bold uppercase text-slate-400">
                     {isBn ? 'ArcGIS Pro ও GIS লেয়ার (WA+WB+WC)' : 'ArcGIS Pro & GIS (WA+WB+WC)'}
                   </div>
-                  <button
-                    onClick={() => handleExport('aprx')}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sky-50 text-sky-900 font-bold"
-                  >
-                    <Globe className="h-4 w-4 text-emerald-600 shrink-0" /> ArcGIS Pro Project (.aprx — 3 Maps Layout)
-                  </button>
                   <button
                     onClick={() => handleExport('arcgis')}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sky-50 text-sky-800 font-semibold"
