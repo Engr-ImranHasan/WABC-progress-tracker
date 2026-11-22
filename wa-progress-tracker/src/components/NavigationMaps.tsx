@@ -275,24 +275,49 @@ export const WbNavigationMapGroup: React.FC<WbMapProps> = ({
 
         {/* Nodes WB1..WB38 with 2D collision-free cartographic label placement */}
         {(() => {
+          const wp = viewport.project(
+            (wb.washoutCoord || DEFAULT_WASHOUT_COORD).lat,
+            (wb.washoutCoord || DEFAULT_WASHOUT_COORD).lon
+          );
+          const ap = viewport.project(
+            (wb.airValveCoord || DEFAULT_AIR_VALVE_COORD).lat,
+            (wb.airValveCoord || DEFAULT_AIR_VALVE_COORD).lon
+          );
+          // Cover BOTH blue completion tip halo AND dark-blue "Done: ..." pill
           const tipBox: LabelRectBox = {
-            x: tipScreen.x + (compact ? 5 : 9),
-            y: tipScreen.y - (compact ? 8 : 11),
-            w: compact ? 58 : 80,
-            h: compact ? 14 : 18,
+            x: tipScreen.x - (compact ? 8 : 11),
+            y: tipScreen.y - (compact ? 10 : 13),
+            w: compact ? 74 : 102,
+            h: compact ? 20 : 26,
+          };
+          const wpBox: LabelRectBox = {
+            x: wp.x - (compact ? 6 : 8.5),
+            y: wp.y - (compact ? 6 : 8.5),
+            w: compact ? 12 : 17,
+            h: compact ? 12 : 17,
+          };
+          const apBox: LabelRectBox = {
+            x: ap.x - (compact ? 6 : 8.5),
+            y: ap.y - (compact ? 6 : 8.5),
+            w: compact ? 12 : 17,
+            h: compact ? 12 : 17,
           };
           const legBox: LabelRectBox = {
-            x: mapX + 4,
-            y: mapY + mapH - (compact ? 36 : 48),
-            w: compact ? 108 : 152,
-            h: compact ? 33 : 45,
+            x: mapX + 3,
+            y: mapY + mapH - (compact ? 40 : 51),
+            w: compact ? 114 : 156,
+            h: compact ? 37 : 48,
           };
           const northBox: LabelRectBox = {
-            x: mapX + mapW - (compact ? 31 : 43),
-            y: mapY + 4,
-            w: compact ? 24 : 30,
-            h: compact ? 24 : 30,
+            x: mapX + mapW - (compact ? 32 : 44),
+            y: mapY + 3,
+            w: compact ? 26 : 32,
+            h: compact ? 26 : 32,
           };
+          const customBoxes: LabelRectBox[] = (wb.customPoints || []).map((cp) => {
+            const cpp = viewport.project(cp.lat, cp.lon);
+            return { x: cpp.x - 7, y: cpp.y - 7, w: 68, h: 15 };
+          });
 
           const projected = wb.nodes.map((n, idx) => {
             const pt = viewport.project(n.lat, n.lon);
@@ -302,27 +327,27 @@ export const WbNavigationMapGroup: React.FC<WbMapProps> = ({
           });
 
           const labelItems: MapLabelInput[] = projected
-            .filter(({ idx, isSel }) => !compact || idx === 0 || idx === wb.nodes.length - 1 || isSel || idx % 3 === 0)
+            .filter(({ idx, isSel }) => !compact || idx === 0 || idx === wb.nodes.length - 1 || isSel || idx % 4 === 0)
             .map(({ n, idx, pt, isSel, r }) => ({
               id: n.id,
               text: n.id,
               px: pt.x,
               py: pt.y,
               markerRadius: r,
-              priority: isSel ? 100 : idx === 0 || idx === wb.nodes.length - 1 ? 85 : idx % 3 === 0 ? 55 : 40,
+              priority: isSel ? 100 : idx === 0 || idx === wb.nodes.length - 1 ? 85 : idx % 3 === 0 ? 58 : 42,
               preferredSide: idx % 2 === 0 ? 'right' : 'left',
-              mustPlace: isSel,
+              mustPlace: true,
             }));
 
           const placed = layoutMapLabels(
             labelItems,
             { x: mapX, y: mapY, w: mapW, h: mapH },
             {
-              fontSize: compact ? 4.8 : 6.4,
-              blockedBoxes: [tipBox, legBox, northBox],
+              fontSize: compact ? 4.7 : 6.1,
+              blockedBoxes: [tipBox, wpBox, apBox, legBox, northBox, ...customBoxes],
               polylinePoints: projected.map((p) => p.pt),
-              padding: compact ? 1.5 : 2.0,
-              maxTier: compact ? 2 : 3,
+              padding: compact ? 2.1 : 2.3,
+              maxTier: compact ? 4 : 5,
             }
           );
 
@@ -382,7 +407,7 @@ export const WbNavigationMapGroup: React.FC<WbMapProps> = ({
                     height={lbl.boxH}
                     rx={1.8}
                     fill="#ffffff"
-                    fillOpacity={0.91}
+                    fillOpacity={0.93}
                     stroke="#cbd5e1"
                     strokeWidth={0.35}
                   />
@@ -390,7 +415,7 @@ export const WbNavigationMapGroup: React.FC<WbMapProps> = ({
                     x={lbl.textX}
                     y={lbl.textY}
                     textAnchor={lbl.textAnchor}
-                    fontSize={compact ? 4.8 : 6.4}
+                    fontSize={compact ? 4.7 : 6.1}
                     fontWeight="700"
                     fill="#0f172a"
                   >
@@ -739,14 +764,18 @@ export const WcNavigationMapGroup: React.FC<WcMapProps> = ({
         {/* Shaft Node Markers WC-1 .. WC-27 with 2D collision-free label placement */}
         {(() => {
           const blocked: LabelRectBox[] = [
-            { x: mapX + mapW - 30, y: mapY + 5, w: 25, h: 25 },
+            { x: mapX + mapW - 31, y: mapY + 4, w: 27, h: 27 },
           ];
+          for (const cp of wc.customPoints || []) {
+            const cpp = viewport.project(cp.lat, cp.lon);
+            blocked.push({ x: cpp.x - 7, y: cpp.y - 7, w: 68, h: 15 });
+          }
           if (isTallVertical) {
             blocked.push({
-              x: mapX + 5,
-              y: mapY + mapH - (viewMode !== 'overall' ? 56 : 44),
-              w: 118,
-              h: viewMode !== 'overall' ? 50 : 38,
+              x: mapX + 4,
+              y: mapY + mapH - (viewMode !== 'overall' ? 58 : 46),
+              w: 138,
+              h: viewMode !== 'overall' ? 53 : 41,
             });
           }
 
@@ -768,7 +797,7 @@ export const WcNavigationMapGroup: React.FC<WcMapProps> = ({
             return { gNode, idx, pt, col, isSel, hasNewShaft, r };
           });
 
-          const fSize = isTallVertical ? 6.8 : compact ? 4.6 : 5.8;
+          const fSize = isTallVertical ? 6.6 : compact ? 4.6 : 5.8;
           const labelItems: MapLabelInput[] = projected
             .filter(({ idx, isSel }) => isTallVertical || idx === 0 || idx === wc.geoNodes.length - 1 || isSel || (!compact ? idx % 2 === 0 : idx % 3 === 0))
             .map(({ gNode, idx, pt, isSel, r }) => ({
@@ -779,7 +808,7 @@ export const WcNavigationMapGroup: React.FC<WcMapProps> = ({
               markerRadius: r,
               priority: isSel ? 100 : idx === 0 || idx === wc.geoNodes.length - 1 ? 85 : idx % 2 === 0 ? 55 : 40,
               preferredSide: idx % 2 === 0 ? 'right' : 'left',
-              mustPlace: isSel,
+              mustPlace: isTallVertical || isSel,
             }));
 
           const placed = layoutMapLabels(
@@ -789,8 +818,8 @@ export const WcNavigationMapGroup: React.FC<WcMapProps> = ({
               fontSize: fSize,
               blockedBoxes: blocked,
               polylinePoints: projected.map((p) => p.pt),
-              padding: 2.0,
-              maxTier: isTallVertical ? 3 : 2,
+              padding: 2.3,
+              maxTier: isTallVertical ? 5 : 3,
             }
           );
 
@@ -1126,15 +1155,19 @@ export const WaNavigationMapGroup: React.FC<WaMapProps> = ({
         {/* WA Shaft Nodes with 2D collision-free cartographic label placement */}
         {(() => {
           const blocked: LabelRectBox[] = [
-            { x: spsPt.x - 12, y: spsPt.y - 8, w: 24, h: 16 },
-            { x: mapX + mapW - 30, y: mapY + 5, w: 25, h: 25 },
+            { x: spsPt.x - 14, y: spsPt.y - 9, w: 28, h: 18 },
+            { x: mapX + mapW - 31, y: mapY + 4, w: 27, h: 27 },
             {
-              x: mapX + 5,
-              y: mapY + mapH - (viewMode !== 'overall' ? 68 : 56),
-              w: 136,
-              h: viewMode !== 'overall' ? 62 : 50,
+              x: mapX + 4,
+              y: mapY + mapH - (viewMode !== 'overall' ? 70 : 58),
+              w: 138,
+              h: viewMode !== 'overall' ? 64 : 52,
             },
           ];
+          for (const cp of customPoints || []) {
+            const cpp = viewport.project(cp.lat, cp.lon);
+            blocked.push({ x: cpp.x - 7, y: cpp.y - 7, w: 68, h: 15 });
+          }
 
           const projected = nodes.map((gNode, idx) => {
             const pt = viewport.project(gNode.lat, gNode.lon);
@@ -1155,7 +1188,7 @@ export const WaNavigationMapGroup: React.FC<WaMapProps> = ({
           });
 
           const polyPts = [...projected.map((p) => p.pt), spsPt];
-          const labelItems: MapLabelInput[] = projected.map(({ gNode, idx, pt, isSel, r }) => {
+          const labelItems: MapLabelInput[] = projected.map(({ gNode, idx, pt, r }) => {
             const isKey = idx === 0 || idx === nodes.length - 1 || gNode.id === 'WA-24.1';
             // In dense horizontal WA-1..WA-6 stretch prefer alternating top/bottom
             const pref: MapLabelInput['preferredSide'] =
@@ -1172,9 +1205,9 @@ export const WaNavigationMapGroup: React.FC<WaMapProps> = ({
               px: pt.x,
               py: pt.y,
               markerRadius: r,
-              priority: isSel ? 100 : isKey ? 85 : idx % 2 === 0 ? 55 : 42,
+              priority: selectedShaftId === gNode.id ? 100 : isKey ? 85 : idx % 2 === 0 ? 55 : 42,
               preferredSide: pref,
-              mustPlace: isSel,
+              mustPlace: true,
             };
           });
 
@@ -1182,11 +1215,11 @@ export const WaNavigationMapGroup: React.FC<WaMapProps> = ({
             labelItems,
             { x: mapX, y: mapY, w: mapW, h: mapH },
             {
-              fontSize: 6.7,
+              fontSize: 6.4,
               blockedBoxes: blocked,
               polylinePoints: polyPts,
-              padding: 2.0,
-              maxTier: 3,
+              padding: 2.2,
+              maxTier: 5,
             }
           );
 
@@ -1270,7 +1303,7 @@ export const WaNavigationMapGroup: React.FC<WaMapProps> = ({
                     x={lbl.textX}
                     y={lbl.textY}
                     textAnchor={lbl.textAnchor}
-                    fontSize={6.7}
+                    fontSize={6.4}
                     fontWeight="800"
                     fill="#0f172a"
                   >

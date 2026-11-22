@@ -107,6 +107,7 @@ export function App() {
   const [showInspector, setShowInspector] = useState<boolean>(true);
   const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
   const [showSavedTime, setShowSavedTime] = useState<boolean>(false);
+  const [showSyncPopup, setShowSyncPopup] = useState<boolean>(false);
   const [requestedEditorTab, setRequestedEditorTab] = useState<{
     tab: 'single' | 'table' | 'settings';
     seq: number;
@@ -476,8 +477,8 @@ export function App() {
         await exportArcGisProPackage(state);
         showToast(
           isBn
-            ? 'ArcGIS Pro GIS প্যাকেজ (.zip — SHP + GeoJSON + Fields) ডাউনলোড হয়েছে!'
-            : 'ArcGIS Pro GIS Package (.zip — SHP + GeoJSON + Fields) exported!'
+            ? 'ArcGIS Pro GIS প্যাকেজ (.zip — APRX+SHP+GeoJSON) ডাউনলোড হয়েছে!'
+            : 'ArcGIS Pro GIS Package (.zip — APRX+SHP+GeoJSON) exported!'
         );
         return;
       }
@@ -762,9 +763,35 @@ export function App() {
       <header className="no-print z-30 flex flex-nowrap items-center justify-between gap-2 border-b border-slate-700/80 bg-slate-900 px-3 py-1.5 text-white shadow-sm">
         {/* Brand & Compact Green Autosave Tick (Click to view saved timestamp) */}
         <div className="relative flex shrink-0 items-center gap-1.5">
-          <h1 className="whitespace-nowrap text-[13px] font-bold tracking-tight text-white">
-            WABC Progress Studio
-          </h1>
+          <div
+            className="relative flex items-center"
+            onMouseEnter={() => setShowSyncPopup(true)}
+            onMouseLeave={() => setShowSyncPopup(false)}
+          >
+            <h1
+              data-testid="app-brand-title"
+              className="cursor-default whitespace-nowrap text-[15.5px] font-extrabold tracking-tight text-white transition hover:text-emerald-200"
+            >
+              WABC Progress Studio
+            </h1>
+
+            {showSyncPopup && (
+              <div
+                data-testid="sync-status-popup"
+                className="pointer-events-none absolute left-0 top-7 z-50 w-max rounded-lg border border-emerald-500/45 bg-slate-900/95 px-3 py-2 text-[11.5px] font-medium text-slate-100 shadow-2xl ring-1 ring-white/10 backdrop-blur-sm"
+              >
+                <div className="flex items-center gap-2 whitespace-nowrap py-0.5">
+                  <span className="sync-dot-blink inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-400" />
+                  <span>Sync with Autodesk AutoCAD 2021</span>
+                </div>
+                <div className="my-1 border-t border-slate-700/70" />
+                <div className="flex items-center gap-2 whitespace-nowrap py-0.5">
+                  <span className="sync-dot-blink inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-400" />
+                  <span>Sync with ArcGIS Pro 3.5.0</span>
+                </div>
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => setShowSavedTime((v) => !v)}
@@ -965,7 +992,7 @@ export function App() {
                     onClick={() => handleExport('arcgis')}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sky-50 text-sky-800 font-semibold"
                   >
-                    <Globe className="h-4 w-4 text-sky-600 shrink-0" /> ArcGIS Pro Package (.zip: SHP+GeoJSON)
+                    <Globe className="h-4 w-4 text-sky-600 shrink-0" /> ArcGIS Pro Package (.zip: APRX+SHP+GeoJSON)
                   </button>
                   <button
                     onClick={() => {

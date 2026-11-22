@@ -614,6 +614,60 @@ function distPointToSegSq(
   return (px - cx) * (px - cx) + (py - cy) * (py - cy);
 }
 
+function segIntersectsRect(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  r: LabelRectBox,
+  pad = 1.0
+): boolean {
+  const rx0 = r.x - pad;
+  const ry0 = r.y - pad;
+  const rx1 = r.x + r.w + pad;
+  const ry1 = r.y + r.h + pad;
+
+  const dx = bx - ax;
+  const dy = by - ay;
+  let t0 = 0;
+  let t1 = 1;
+  const p = [-dx, dx, -dy, dy];
+  const q = [ax - rx0, rx1 - ax, ay - ry0, ry1 - ay];
+  for (let i = 0; i < 4; i++) {
+    if (Math.abs(p[i]) < 1e-9) {
+      if (q[i] < 0) return false;
+    } else {
+      const t = q[i] / p[i];
+      if (p[i] < 0) {
+        if (t > t1) return false;
+        if (t > t0) t0 = t;
+      } else {
+        if (t < t0) return false;
+        if (t < t1) t1 = t;
+      }
+    }
+  }
+  return t0 <= t1;
+}
+
+function segsCross(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  dx: number,
+  dy: number
+): boolean {
+  const ccw = (p1x: number, p1y: number, p2x: number, p2y: number, p3x: number, p3y: number) =>
+    (p3y - p1y) * (p2x - p1x) > (p2y - p1y) * (p3x - p1x);
+  return (
+    ccw(ax, ay, cx, cy, dx, dy) !== ccw(bx, by, cx, cy, dx, dy) &&
+    ccw(ax, ay, bx, by, cx, cy) !== ccw(ax, ay, bx, by, dx, dy)
+  );
+}
+
 export function layoutMapLabels(
   items: MapLabelInput[],
   bounds: LabelRectBox,
@@ -622,36 +676,41 @@ export function layoutMapLabels(
     blockedBoxes?: LabelRectBox[];
     polylinePoints?: Array<{ x: number; y: number }>;
     padding?: number;
-    maxTier?: 2 | 3;
+    maxTier?: 2 | 3 | 4 | 5;
   }
 ): Map<string, PlacedMapLabel> {
   const fontSize = options?.fontSize ?? 6.8;
-  const pad = options?.padding ?? 1.8;
-  const maxTier = options?.maxTier ?? 3;
+  const pad = options?.padding ?? 2.3;
+  const maxTier = options?.maxTier ?? 4;
   const linePts = options?.polylinePoints ?? [];
-  const charW = fontSize * 0.56;
-  const boxH = fontSize + 3.4;
+  const charW = fontSize * 0.66;
+  const boxH = fontSize + 4.0;
 
-  // Obstacle boxes: every marker + caller-provided obstacles (legend, north arrow, SPS, etc.)
-  const obstacles: LabelRectBox[] = [...(options?.blockedBoxes ?? [])];
-  for (const it of items) {
+  // External obstacle boxes (legends, north arrows, SPS, Washout, Air Valve, Done pill)
+  const extObstacles: LabelRectBox[] = [...(options?.blockedBoxes ?? [])];
+  // Per-item marker obstacle boxes (kept parallel to `items` so we skip own marker on leader check)
+  const markerObstacles: Array<{ id: string; box: LabelRectBox }> = items.map((it) => {
     const mr = Math.max(3, it.markerRadius) + 2.0;
-    obstacles.push({
-      x: it.px - mr,
-      y: it.py - mr,
-      w: mr * 2,
-      h: mr * 2,
-    });
-  }
+    return {
+      id: it.id,
+      box: {
+        x: it.px - mr,
+        y: it.py - mr,
+        w: mr * 2,
+        h: mr * 2,
+      },
+    };
+  });
 
   const placedBoxes: LabelRectBox[] = [];
+  const placedLeaders: Array<{ ax: number; ay: number; bx: number; by: number }> = [];
   const result = new Map<string, PlacedMapLabel>();
 
-  // Highest priority placed first; tie-break favors endpoints then even spread
+  // Highest priority placed first
   const ordered = [...items].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 
   for (const it of ordered) {
-    const boxW = Math.max(18, it.text.length * charW + 5.2);
+    const boxW = Math.max(20, it.text.length * charW + 6.0);
     const r = Math.max(3, it.markerRadius);
 
     interface Candidate {
@@ -661,12 +720,12 @@ export function layoutMapLabels(
       dirTag: string;
     }
 
-    const tiers = maxTier === 3 ? [r + 4.5, r + 13.5, r + 24.5] : [r + 4.5, r + 13.5];
+    const baseTiers = [r + 4.8, r + 13.5, r + 24.0, r + 35.5, r + 47.5];
+    const tiers = baseTiers.slice(0, maxTier);
     const candidates: Candidate[] = [];
 
     tiers.forEach((gap, tierIdx) => {
-      const tp = tierIdx * 35;
-      // Compute candidate boxes in 8 clean cartographic placements around (px, py)
+      const tp = tierIdx * 36;
       const cList: Array<{ bx: number; by: number; dir: string; prefBonus: number }> = [
         { bx: it.px + gap, by: it.py - boxH / 2, dir: 'right', prefBonus: it.preferredSide === 'right' ? -12 : 0 },
         { bx: it.px - gap - boxW, by: it.py - boxH / 2, dir: 'left', prefBonus: it.preferredSide === 'left' ? -12 : 0 },
@@ -677,6 +736,15 @@ export function layoutMapLabels(
         { bx: it.px + gap * 0.78, by: it.py + gap * 0.78, dir: 'br', prefBonus: 6 },
         { bx: it.px - gap * 0.78 - boxW, by: it.py + gap * 0.78, dir: 'bl', prefBonus: 6 },
       ];
+      if (tierIdx >= 1) {
+        // Extra staggered angles on outer rings so dense 4-node clusters fan cleanly
+        cList.push(
+          { bx: it.px + gap * 0.94, by: it.py - gap * 0.4 - boxH * 0.5, dir: 'ene', prefBonus: 8 },
+          { bx: it.px + gap * 0.94, by: it.py + gap * 0.4 - boxH * 0.5, dir: 'ese', prefBonus: 8 },
+          { bx: it.px - gap * 0.94 - boxW, by: it.py - gap * 0.4 - boxH * 0.5, dir: 'wnw', prefBonus: 8 },
+          { bx: it.px - gap * 0.94 - boxW, by: it.py + gap * 0.4 - boxH * 0.5, dir: 'wsw', prefBonus: 8 }
+        );
+      }
       for (const c of cList) {
         candidates.push({
           boxX: c.bx,
@@ -692,7 +760,6 @@ export function layoutMapLabels(
     for (const cand of candidates) {
       const box: LabelRectBox = { x: cand.boxX, y: cand.boxY, w: boxW, h: boxH };
 
-      // Check map boundary strict containment
       if (
         box.x < bounds.x + 2 ||
         box.y < bounds.y + 2 ||
@@ -703,8 +770,11 @@ export function layoutMapLabels(
       }
 
       let overlapCount = 0;
-      for (const ob of obstacles) {
+      for (const ob of extObstacles) {
         if (rectsOverlap(box, ob, pad)) overlapCount++;
+      }
+      for (const mo of markerObstacles) {
+        if (rectsOverlap(box, mo.box, pad)) overlapCount++;
       }
       for (const pb of placedBoxes) {
         if (rectsOverlap(box, pb, pad)) overlapCount++;
@@ -712,11 +782,41 @@ export function layoutMapLabels(
 
       if (overlapCount > 0 && !it.mustPlace) continue;
 
+      const cx = box.x + box.w / 2;
+      const cy = box.y + box.h / 2;
+      const lx2 = Math.max(box.x, Math.min(box.x + box.w, it.px));
+      const ly2 = Math.max(box.y, Math.min(box.y + box.h, it.py));
+      const distFromMarker = Math.hypot(cx - it.px, cy - it.py);
+      const willDrawLeader = distFromMarker > r + 15;
+
+      // Leader crossing penalty: prevent leader from cutting across ANY label box, obstacle, or prior leader!
+      let leaderCrossPenalty = 0;
+      if (willDrawLeader) {
+        for (const pb of placedBoxes) {
+          if (segIntersectsRect(it.px, it.py, lx2, ly2, pb, 1.4)) {
+            leaderCrossPenalty += 3800;
+          }
+        }
+        for (const ob of extObstacles) {
+          if (segIntersectsRect(it.px, it.py, lx2, ly2, ob, 1.0)) {
+            leaderCrossPenalty += 2600;
+          }
+        }
+        for (const mo of markerObstacles) {
+          if (mo.id !== it.id && segIntersectsRect(it.px, it.py, lx2, ly2, mo.box, 0.5)) {
+            leaderCrossPenalty += 1200;
+          }
+        }
+        for (const pl of placedLeaders) {
+          if (segsCross(it.px, it.py, lx2, ly2, pl.ax, pl.ay, pl.bx, pl.by)) {
+            leaderCrossPenalty += 1800;
+          }
+        }
+      }
+
       // Polyline proximity penalty so labels sit cleanly off the tunnel line
       let linePenalty = 0;
       if (linePts.length >= 2) {
-        const cx = box.x + box.w / 2;
-        const cy = box.y + box.h / 2;
         let minD2 = Infinity;
         for (let li = 0; li < linePts.length - 1; li++) {
           const d2 = distPointToSegSq(
@@ -729,10 +829,10 @@ export function layoutMapLabels(
           );
           if (d2 < minD2) minD2 = d2;
         }
-        if (minD2 < 100) linePenalty = (10 - Math.sqrt(minD2)) * 2.5;
+        if (minD2 < 110) linePenalty = (10.5 - Math.sqrt(minD2)) * 2.8;
       }
 
-      const score = overlapCount * 5000 + cand.tierPenalty + linePenalty;
+      const score = overlapCount * 6000 + leaderCrossPenalty + cand.tierPenalty + linePenalty;
       if (!best || score < best.score) {
         best = { cand, score, clean: overlapCount === 0 };
       }
@@ -754,6 +854,10 @@ export function layoutMapLabels(
     const leaderX2 = Math.max(chosenBox.x, Math.min(chosenBox.x + chosenBox.w, it.px));
     const leaderY2 = Math.max(chosenBox.y, Math.min(chosenBox.y + chosenBox.h, it.py));
     const distFromMarker = Math.hypot(cx - it.px, cy - it.py);
+    const needsLeader = distFromMarker > r + 15;
+    if (needsLeader) {
+      placedLeaders.push({ ax: it.px, ay: it.py, bx: leaderX2, by: leaderY2 });
+    }
 
     result.set(it.id, {
       id: it.id,
@@ -769,7 +873,7 @@ export function layoutMapLabels(
       textAnchor: 'middle',
       leaderX2,
       leaderY2,
-      needsLeader: distFromMarker > r + 15,
+      needsLeader,
     });
   }
 

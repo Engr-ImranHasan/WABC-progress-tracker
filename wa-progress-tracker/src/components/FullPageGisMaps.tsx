@@ -159,71 +159,72 @@ function resolveSmartLabel(
   preferredSide: 'right' | 'left' | 'top' | 'bottom' = 'right',
   nodeDotRadius = 8
 ): PlacedLabel {
-  const estW = Math.max(28, label.length * fontSize * 0.62 + 6);
-  const estH = fontSize + 4;
+  const estW = Math.max(36, label.length * fontSize * 0.72 + 11);
+  const estH = fontSize + 6.5;
+  const labelMargin = 4.2;
 
   const baseOffsets: Array<[number, number, 'start' | 'middle' | 'end']> =
     preferredSide === 'left'
       ? [
-          [-(nodeDotRadius + 5), 3, 'end'],
-          [nodeDotRadius + 5, 3, 'start'],
-          [0, -(nodeDotRadius + 5), 'middle'],
-          [0, nodeDotRadius + estH + 1, 'middle'],
-          [-(nodeDotRadius + 16), -12, 'end'],
-          [nodeDotRadius + 16, 14, 'start'],
-          [-(nodeDotRadius + 24), 14, 'end'],
-          [nodeDotRadius + 24, -12, 'start'],
-          [-(nodeDotRadius + 34), -2, 'end'],
-          [nodeDotRadius + 34, -2, 'start'],
-          [-(nodeDotRadius + 22), -24, 'end'],
-          [nodeDotRadius + 22, 26, 'start'],
+          [-(nodeDotRadius + 6), 4, 'end'],
+          [nodeDotRadius + 6, 4, 'start'],
+          [0, -(nodeDotRadius + 7), 'middle'],
+          [0, nodeDotRadius + estH + 2, 'middle'],
+          [-(nodeDotRadius + 18), -14, 'end'],
+          [nodeDotRadius + 18, 16, 'start'],
+          [-(nodeDotRadius + 28), 16, 'end'],
+          [nodeDotRadius + 28, -14, 'start'],
+          [-(nodeDotRadius + 38), -2, 'end'],
+          [nodeDotRadius + 38, -2, 'start'],
+          [-(nodeDotRadius + 26), -28, 'end'],
+          [nodeDotRadius + 26, 30, 'start'],
         ]
       : preferredSide === 'top'
       ? [
-          [0, -(nodeDotRadius + 5), 'middle'],
-          [0, nodeDotRadius + estH + 1, 'middle'],
-          [nodeDotRadius + 5, 3, 'start'],
-          [-(nodeDotRadius + 5), 3, 'end'],
-          [nodeDotRadius + 14, -14, 'start'],
-          [-(nodeDotRadius + 14), -14, 'end'],
-          [nodeDotRadius + 24, 16, 'start'],
-          [-(nodeDotRadius + 24), 16, 'end'],
-          [0, -(nodeDotRadius + 22), 'middle'],
-          [0, nodeDotRadius + estH + 18, 'middle'],
+          [0, -(nodeDotRadius + 7), 'middle'],
+          [0, nodeDotRadius + estH + 2, 'middle'],
+          [nodeDotRadius + 6, 4, 'start'],
+          [-(nodeDotRadius + 6), 4, 'end'],
+          [nodeDotRadius + 16, -16, 'start'],
+          [-(nodeDotRadius + 16), -16, 'end'],
+          [nodeDotRadius + 28, 18, 'start'],
+          [-(nodeDotRadius + 28), 18, 'end'],
+          [0, -(nodeDotRadius + 26), 'middle'],
+          [0, nodeDotRadius + estH + 22, 'middle'],
         ]
       : preferredSide === 'bottom'
       ? [
-          [0, nodeDotRadius + estH + 1, 'middle'],
-          [0, -(nodeDotRadius + 5), 'middle'],
-          [nodeDotRadius + 5, 3, 'start'],
-          [-(nodeDotRadius + 5), 3, 'end'],
-          [nodeDotRadius + 16, 16, 'start'],
-          [-(nodeDotRadius + 16), 16, 'end'],
-          [nodeDotRadius + 24, -14, 'start'],
-          [-(nodeDotRadius + 24), -14, 'end'],
-          [0, nodeDotRadius + estH + 20, 'middle'],
+          [0, nodeDotRadius + estH + 2, 'middle'],
+          [0, -(nodeDotRadius + 7), 'middle'],
+          [nodeDotRadius + 6, 4, 'start'],
+          [-(nodeDotRadius + 6), 4, 'end'],
+          [nodeDotRadius + 18, 18, 'start'],
+          [-(nodeDotRadius + 18), 18, 'end'],
+          [nodeDotRadius + 28, -16, 'start'],
+          [-(nodeDotRadius + 28), -16, 'end'],
+          [0, nodeDotRadius + estH + 24, 'middle'],
         ]
       : [
-          [nodeDotRadius + 5, 3, 'start'],
-          [-(nodeDotRadius + 5), 3, 'end'],
-          [0, -(nodeDotRadius + 5), 'middle'],
-          [0, nodeDotRadius + estH + 1, 'middle'],
-          [nodeDotRadius + 16, -12, 'start'],
-          [-(nodeDotRadius + 16), 14, 'end'],
-          [nodeDotRadius + 24, 14, 'start'],
-          [-(nodeDotRadius + 24), -12, 'end'],
-          [nodeDotRadius + 34, -2, 'start'],
-          [-(nodeDotRadius + 34), -2, 'end'],
-          [nodeDotRadius + 22, -24, 'start'],
-          [-(nodeDotRadius + 22), 26, 'end'],
+          [nodeDotRadius + 6, 4, 'start'],
+          [-(nodeDotRadius + 6), 4, 'end'],
+          [0, -(nodeDotRadius + 7), 'middle'],
+          [0, nodeDotRadius + estH + 2, 'middle'],
+          [nodeDotRadius + 18, -14, 'start'],
+          [-(nodeDotRadius + 18), 16, 'end'],
+          [nodeDotRadius + 28, 16, 'start'],
+          [-(nodeDotRadius + 28), -14, 'end'],
+          [nodeDotRadius + 38, -2, 'start'],
+          [-(nodeDotRadius + 38), -2, 'end'],
+          [nodeDotRadius + 26, -28, 'start'],
+          [-(nodeDotRadius + 26), 30, 'end'],
         ];
 
   const makeBox = (dx: number, dy: number, anchor: 'start' | 'middle' | 'end'): RectBox => {
     const lx = ptX + dx;
     const ly = ptY + dy;
-    const x0 = anchor === 'start' ? lx : anchor === 'end' ? lx - estW : lx - estW / 2;
+    const x0 = anchor === 'start' ? lx - 3 : anchor === 'end' ? lx - estW + 3 : lx - estW / 2;
     const x1 = x0 + estW;
-    return { x0, y0: ly - estH + 2, x1, y1: ly + 2 };
+    return { x0, y0: ly - estH + 3, x1, y1: ly + 3 };
   };
 
   for (let i = 0; i < baseOffsets.length; i++) {
@@ -237,7 +238,7 @@ function resolveSmartLabel(
     ) {
       continue;
     }
-    if (!occupied.some((o) => boxesOverlap(box, o, 2))) {
+    if (!occupied.some((o) => boxesOverlap(box, o, labelMargin))) {
       occupied.push(box);
       return {
         x: ptX + dx,
@@ -248,8 +249,8 @@ function resolveSmartLabel(
     }
   }
 
-  for (let dist = 26; dist <= 96; dist += 12) {
-    for (let deg = 0; deg < 360; deg += 30) {
+  for (let dist = 28; dist <= 112; dist += 12) {
+    for (let deg = 0; deg < 360; deg += 24) {
       const rad = (deg * Math.PI) / 180;
       const dx = Math.round(Math.cos(rad) * dist);
       const dy = Math.round(Math.sin(rad) * dist);
@@ -263,7 +264,7 @@ function resolveSmartLabel(
       ) {
         continue;
       }
-      if (!occupied.some((o) => boxesOverlap(box, o, 2))) {
+      if (!occupied.some((o) => boxesOverlap(box, o, labelMargin))) {
         occupied.push(box);
         return { x: ptX + dx, y: ptY + dy, anchor, leaderNeeded: true };
       }
@@ -1072,7 +1073,7 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
             { nodeId: 'WA-23', label: 'Chayabithy', side: 'right', dx: 92, dy: 4, stopDist: 34 },
             { nodeId: 'WA-27', label: 'North Mugdapara', side: 'right', dx: 92, dy: -8, stopDist: 34 },
             { nodeId: 'WA-28', label: 'Mugdapara-Maniknogor Bridge', side: 'left', dx: -320, dy: 6, stopDist: 34 },
-            { nodeId: 'WA-35', label: 'City Corp. Adarsha High School', side: 'left', dx: -315, dy: -12, stopDist: 34 },
+            { nodeId: 'WA-35', label: 'City Corp. Adarsha High School', side: 'left', dx: -335, dy: 46, stopDist: 28 },
           ];
 
           return (
@@ -1136,10 +1137,10 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
               {renderHighlightedCallout(spsPt.x, spsPt.y, 'Golapbag Pump Station (SPS)', occupied, mapBounds, {
                 key: 'wa-sps-callout',
                 preferredSide: 'right',
-                baseOffsetX: 38,
-                baseOffsetY: -18,
+                baseOffsetX: 54,
+                baseOffsetY: -22,
                 fontSize: 14.8,
-                stopDist: 20,
+                stopDist: 22,
                 bgFill: '#fdf2f8',
                 borderStroke: '#9d174d',
                 textFill: '#831843',
@@ -1189,8 +1190,10 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
                 const prefSide: 'left' | 'right' | 'top' | 'bottom' =
                   gNode.id === 'WA-1'
                     ? 'left'
+                    : gNode.id === 'WA-16'
+                    ? 'right'
                     : gNode.id === 'WA-35'
-                    ? 'bottom'
+                    ? 'top'
                     : gNode.id === 'WA-36'
                     ? 'right'
                     : lmMatch
@@ -1462,10 +1465,10 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
             y1: wbSpsY + 24,
           });
           occupied.push({
-            x0: tipPt.x + 20,
-            y0: tipPt.y - 12,
-            x1: tipPt.x + 122,
-            y1: tipPt.y + 12,
+            x0: tipPt.x - 14,
+            y0: tipPt.y - 14,
+            x1: tipPt.x + 124,
+            y1: tipPt.y + 14,
           });
 
           const washoutCoord = wbData.washoutCoord || DEFAULT_WASHOUT_COORD;
@@ -1504,7 +1507,7 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
             { id: 'WB24', label: 'Mayor Hanif Flyover', dx: 68, dy: 34, side: 'right', targetCoord: { lat: 23.7117, lon: 90.4297 }, stopDist: 10 },
             { id: 'WB27', label: 'Ideal Road', dx: -170, dy: -66, side: 'left', targetCoord: { lat: 23.7116, lon: 90.4275 }, stopDist: 10 },
             { id: 'WB32', label: 'Doyagonj Bazar Road', dx: 24, dy: 58, side: 'right', targetCoord: { lat: 23.7099, lon: 90.4266 }, stopDist: 10 },
-            { id: 'WB38', label: 'Doyagonj Chowrasta (Junc. WD2 & WD3)', dx: -24, dy: 64, side: 'right', stopDist: 13 },
+            { id: 'WB38', label: 'Doyagonj Chowrasta (Junc. WD2 & WD3)', dx: 48, dy: 64, side: 'right', stopDist: 14 },
           ];
 
           return (
