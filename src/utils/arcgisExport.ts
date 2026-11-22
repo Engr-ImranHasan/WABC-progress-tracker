@@ -23,7 +23,7 @@ import {
   getTunnelStatus,
   resolveDisplayContext,
 } from './calculations';
-import { formatDms } from './geoMap';
+import { computeWbPolylineSplit, formatDms } from './geoMap';
 import { buildWabcAprxUint8Array } from './aprxBuilder';
 
 const WGS84_PRJ_WKT =
@@ -374,6 +374,7 @@ function addShapefileSetToZip(
 const SHAFT_POINT_FIELDS: DbfFieldSpec[] = [
   { name: 'SECTION', type: 'C', length: 6 },
   { name: 'SHAFT_ID', type: 'C', length: 14 },
+  { name: 'MAP_LABEL', type: 'C', length: 16 },
   { name: 'SHAFT_NO', type: 'N', length: 6, decimals: 0 },
   { name: 'SHAFT_SIZE', type: 'C', length: 18 },
   { name: 'SHAFT_TYPE', type: 'C', length: 22 },
@@ -436,6 +437,7 @@ const SPS_POINT_FIELDS: DbfFieldSpec[] = [
 const WB_NODE_FIELDS: DbfFieldSpec[] = [
   { name: 'SECTION', type: 'C', length: 6 },
   { name: 'NODE_ID', type: 'C', length: 16 },
+  { name: 'MAP_LABEL', type: 'C', length: 18 },
   { name: 'NODE_TYPE', type: 'C', length: 16 },
   { name: 'CHAINAGE_M', type: 'F', length: 10, decimals: 2 },
   { name: 'PIPE_DIA', type: 'C', length: 14 },
@@ -504,6 +506,22 @@ const UNIFIED_LINE_FIELDS: DbfFieldSpec[] = [
   { name: 'RPT_DATE', type: 'C', length: 12 },
 ];
 
+const LANDMARK_POINT_FIELDS: DbfFieldSpec[] = [
+  { name: 'SECTION', type: 'C', length: 6 },
+  { name: 'FEAT_TYPE', type: 'C', length: 16 },
+  { name: 'LABEL', type: 'C', length: 48 },
+  { name: 'REF_NODE', type: 'C', length: 16 },
+  { name: 'LATITUDE', type: 'F', length: 12, decimals: 6 },
+  { name: 'LONGITUDE', type: 'F', length: 12, decimals: 6 },
+];
+
+function formatWaLabel(id: string): string {
+  const m = id.match(/^WA-(\d+)(\.\d+)?$/i);
+  if (!m) return id;
+  const n = Number(m[1]);
+  return `WA ${n < 10 ? '0' + n : n}${m[2] || ''}`;
+}
+
 function makeShaftDatasets(
   section: 'WA' | 'WC',
   shafts: ShaftRecord[],
@@ -543,6 +561,7 @@ function makeShaftDatasets(
       props: {
         SECTION: section,
         SHAFT_ID: s.id,
+        MAP_LABEL: section === 'WA' ? formatWaLabel(s.id) : s.id,
         SHAFT_NO: s.index,
         SHAFT_SIZE: s.shaftSize,
         SHAFT_TYPE: s.shaftType,
@@ -693,10 +712,14 @@ def load_wabc_package():
         ("01_WA_Section", "WA_Tunnels.shp"),
         ("01_WA_Section", "WA_Shafts.shp"),
         ("01_WA_Section", "WA_Golapbag_SPS.shp"),
+        ("01_WA_Section", "WA_Landmarks.shp"),
         ("02_WB_Section", "WB_Pipeline.shp"),
         ("02_WB_Section", "WB_Nodes.shp"),
+        ("02_WB_Section", "WB_Completion_Tip.shp"),
+        ("02_WB_Section", "WB_Landmarks.shp"),
         ("03_WC_Section", "WC_Tunnels.shp"),
         ("03_WC_Section", "WC_Shafts.shp"),
+        ("03_WC_Section", "WC_Landmarks.shp"),
         ("04_Combined_WABC", "WABC_All_Alignments.shp"),
         ("04_Combined_WABC", "WABC_All_Nodes.shp"),
     ]
@@ -735,9 +758,11 @@ def load_wabc_package():
                             item.symbol.color = status_colors[val]
                 lyr.symbology = sym
 
-        # Enable clean ID labels
+        # Enable clean ID / landmark labels
         lbl_field = (
-            "SHAFT_ID" if "SHAFT_ID" in field_names
+            "MAP_LABEL" if "MAP_LABEL" in field_names
+            else "LABEL" if "LABEL" in field_names
+            else "SHAFT_ID" if "SHAFT_ID" in field_names
             else "NODE_ID" if "NODE_ID" in field_names
             else "FEAT_ID" if "FEAT_ID" in field_names
             else None
@@ -776,14 +801,18 @@ Coord   : GCS_WGS_1984 (EPSG:4326) | UTF-8
     - WA_Shafts.shp        (Point: 37 shafts WA-1..WA-36 + WA-24.1)
     - WA_Tunnels.shp       (Polyline: 37 micro-tunnel drives to Golapbag SPS)
     - WA_Golapbag_SPS.shp  (Point: Golapbag Pump Station Lower + Upper Room)
+    - WA_Landmarks.shp     (Point: WA Landmark Callouts + DNCC/DSCC Zone Badges)
 
   02_WB_Section/
-    - WB_Nodes.shp         (Point: WB1..WB38 + Washout + Air Valve)
-    - WB_Pipeline.shp      (Polyline: 37 Open-Cut DN1200 GRP segments)
+    - WB_Nodes.shp           (Point: WB1..WB38 + Washout + Air Valve)
+    - WB_Pipeline.shp        (Polyline: 37 Open-Cut DN1200 GRP segments)
+    - WB_Completion_Tip.shp  (Point: Active Completion Tip Marker)
+    - WB_Landmarks.shp       (Point: WB Corridor Roads + DSCC Zone 05 Badge)
 
   03_WC_Section/
     - WC_Shafts.shp        (Point: 27 shafts WC-1..WC-27)
     - WC_Tunnels.shp       (Polyline: 26 micro-tunnel drives WC-1..WC-27)
+    - WC_Landmarks.shp     (Point: WC Landmark Callouts + DSCC Zone 05/10 Badges)
 
   04_Combined_WABC/
     - WABC_All_Nodes.shp       (Unified Point Layer with SECTION = WA/WB/WC)
@@ -903,6 +932,7 @@ export async function exportArcGisProPackage(state: AppState): Promise<void> {
       props: {
         SECTION: 'WB',
         NODE_ID: n.id,
+        MAP_LABEL: n.id.replace(/^WB(\d)$/i, 'WB0$1'),
         NODE_TYPE: 'Pipeline Node',
         CHAINAGE_M: n.chainageM,
         PIPE_DIA: wb.pipeDia,
@@ -923,6 +953,7 @@ export async function exportArcGisProPackage(state: AppState): Promise<void> {
       props: {
         SECTION: 'WB',
         NODE_ID: 'WASHOUT',
+        MAP_LABEL: 'WASHOUT',
         NODE_TYPE: 'Washout Valve',
         CHAINAGE_M: 0,
         PIPE_DIA: wb.pipeDia,
@@ -943,6 +974,7 @@ export async function exportArcGisProPackage(state: AppState): Promise<void> {
       props: {
         SECTION: 'WB',
         NODE_ID: 'AIR-VALVE',
+        MAP_LABEL: 'AIR VALVE',
         NODE_TYPE: 'Air Valve',
         CHAINAGE_M: 0,
         PIPE_DIA: wb.pipeDia,
@@ -1182,6 +1214,110 @@ export async function exportArcGisProPackage(state: AppState): Promise<void> {
     })),
   ];
 
+  const waGeoSrc = waGeoNodes.length > 0 ? waGeoNodes : INITIAL_WA_GEO_NODES;
+  const waGeoMap = new Map(waGeoSrc.map((g) => [g.id, g]));
+  const wbNodeMap = new Map(wb.nodes.map((n) => [n.id, n]));
+  const wcGeoMap = new Map(wc.geoNodes.map((g) => [g.id, g]));
+  const wbSplit = computeWbPolylineSplit(wb.nodes, wb.totalLengthM, wb.completedLengthM);
+
+  const mkLandmark = (
+    section: string,
+    featType: 'Zone' | 'Landmark' | 'TipMarker',
+    label: string,
+    refNode: string,
+    lat: number,
+    lon: number
+  ): ShpPointFeature => ({
+    lat,
+    lon,
+    props: {
+      SECTION: section,
+      FEAT_TYPE: featType,
+      LABEL: label,
+      REF_NODE: refNode,
+      LATITUDE: Number(lat.toFixed(6)),
+      LONGITUDE: Number(lon.toFixed(6)),
+    },
+  });
+
+  const waLandmarks: ShpPointFeature[] = [
+    mkLandmark('WA', 'Zone', 'DNCC ZONE 03', 'ZONE-DNCC03', 23.7545, 90.4150),
+    mkLandmark('WA', 'Zone', 'DSCC ZONE 02', 'ZONE-DSCC02', 23.7418, 90.4272),
+    ...(
+      [
+        ['WA-1', 'Mirbag (Start WA-01)'],
+        ['WA-12', 'Moulovirtek (Rampura)'],
+        ['WA-14', 'Sipahibag Moor'],
+        ['WA-18', 'Goran Tempo Stand'],
+        ['WA-22', 'East Bashaboo'],
+        ['WA-23', 'Chayabithy'],
+        ['WA-27', 'North Mugdapara'],
+        ['WA-28', 'Mugdapara-Maniknogor Bridge'],
+        ['WA-35', 'City Corp. Adarsha High School'],
+      ] as Array<[string, string]>
+    )
+      .map(([id, lbl]) => {
+        const g = waGeoMap.get(id);
+        return g ? mkLandmark('WA', 'Landmark', lbl, id, g.lat, g.lon) : null;
+      })
+      .filter((x): x is ShpPointFeature => Boolean(x)),
+    mkLandmark('WA', 'Landmark', 'Golapbag Pump Station (SPS)', 'GOLAPBAG-SPS', spsCoord.lat, spsCoord.lon),
+  ];
+
+  const wbLandmarks: ShpPointFeature[] = [
+    mkLandmark('WB', 'Zone', 'DSCC ZONE 05', 'ZONE-DSCC05', 23.7145, 90.4272),
+    mkLandmark('WB', 'Landmark', 'Dhalpur Notun Rasta', 'WB8', 23.7176, 90.4294),
+    mkLandmark('WB', 'Landmark', 'Boubazar Road', 'WB17', 23.7145, 90.4314),
+    mkLandmark('WB', 'Landmark', 'Mayor Hanif Flyover', 'WB24', 23.7117, 90.4297),
+    mkLandmark('WB', 'Landmark', 'Ideal Road', 'WB27', 23.7116, 90.4275),
+    mkLandmark('WB', 'Landmark', 'Doyagonj Bazar Road', 'WB32', 23.7099, 90.4266),
+    ...(wbNodeMap.get('WB38')
+      ? [
+          mkLandmark(
+            'WB',
+            'Landmark',
+            'Doyagonj Chowrasta (Junc. WD2 & WD3)',
+            'WB38',
+            wbNodeMap.get('WB38')!.lat,
+            wbNodeMap.get('WB38')!.lon
+          ),
+        ]
+      : []),
+  ];
+
+  const wbTipFeatures: ShpPointFeature[] = [
+    mkLandmark(
+      'WB',
+      'TipMarker',
+      `Done: ${wb.completedLengthM.toFixed(1)} m`,
+      'WB-TIP',
+      wbSplit.tipPoint.lat,
+      wbSplit.tipPoint.lon
+    ),
+  ];
+
+  const wcLandmarks: ShpPointFeature[] = [
+    mkLandmark('WC', 'Zone', 'DSCC ZONE 05', 'ZONE-DSCC05', 23.6960, 90.4408),
+    mkLandmark('WC', 'Zone', 'DSCC ZONE 10', 'ZONE-DSCC10', 23.6880, 90.4455),
+    ...(wcGeoMap.get('WC-1')
+      ? [mkLandmark('WC', 'Landmark', 'Doyagonj Chowrasta (Start WC-1)', 'WC-1', wcGeoMap.get('WC-1')!.lat, wcGeoMap.get('WC-1')!.lon)]
+      : []),
+    mkLandmark('WC', 'Landmark', 'Shahid Faruk Road', 'WC-4', 23.7073, 90.4266),
+    ...(wcGeoMap.get('WC-9')
+      ? [mkLandmark('WC', 'Landmark', 'Inverted Siphon & Underpass', 'WC-9', wcGeoMap.get('WC-9')!.lat, wcGeoMap.get('WC-9')!.lon)]
+      : []),
+    mkLandmark('WC', 'Landmark', 'Gendaria Rail Station (West)', 'WC-11', 23.6983, 90.4309),
+    mkLandmark('WC', 'Landmark', 'Khandakar Road', 'WC-13', 23.6962, 90.4335),
+    mkLandmark('WC', 'Landmark', '1st BD-China Friendship Bridge Rd', 'WC-15', 23.6939, 90.4328),
+    mkLandmark('WC', 'Landmark', 'Jurain Rail Gate / Titas Gas Rd', 'WC-17', 23.6914, 90.4372),
+    ...(wcGeoMap.get('WC-21')
+      ? [mkLandmark('WC', 'Landmark', 'Shyampur Kadamtoli', 'WC-21', wcGeoMap.get('WC-21')!.lat, wcGeoMap.get('WC-21')!.lon)]
+      : []),
+    ...(wcGeoMap.get('WC-27')
+      ? [mkLandmark('WC', 'Landmark', 'Pagla STP Outfall', 'WC-27', wcGeoMap.get('WC-27')!.lat, wcGeoMap.get('WC-27')!.lon)]
+      : []),
+  ];
+
   const zip = new JSZip();
 
   // Shapefiles (.shp + .shx + .dbf + .prj + .cpg)
@@ -1202,6 +1338,11 @@ export async function exportArcGisProPackage(state: AppState): Promise<void> {
   );
   addShapefileSetToZip(
     zip,
+    '01_WA_Section/WA_Landmarks',
+    buildPointShapefileFiles(waLandmarks, LANDMARK_POINT_FIELDS)
+  );
+  addShapefileSetToZip(
+    zip,
     '02_WB_Section/WB_Nodes',
     buildPointShapefileFiles(wbPoints, WB_NODE_FIELDS)
   );
@@ -1212,6 +1353,16 @@ export async function exportArcGisProPackage(state: AppState): Promise<void> {
   );
   addShapefileSetToZip(
     zip,
+    '02_WB_Section/WB_Landmarks',
+    buildPointShapefileFiles(wbLandmarks, LANDMARK_POINT_FIELDS)
+  );
+  addShapefileSetToZip(
+    zip,
+    '02_WB_Section/WB_Completion_Tip',
+    buildPointShapefileFiles(wbTipFeatures, LANDMARK_POINT_FIELDS)
+  );
+  addShapefileSetToZip(
+    zip,
     '03_WC_Section/WC_Shafts',
     buildPointShapefileFiles(wcData.points, SHAFT_POINT_FIELDS)
   );
@@ -1219,6 +1370,11 @@ export async function exportArcGisProPackage(state: AppState): Promise<void> {
     zip,
     '03_WC_Section/WC_Tunnels',
     buildPolylineShapefileFiles(wcData.lines, TUNNEL_LINE_FIELDS)
+  );
+  addShapefileSetToZip(
+    zip,
+    '03_WC_Section/WC_Landmarks',
+    buildPointShapefileFiles(wcLandmarks, LANDMARK_POINT_FIELDS)
   );
   addShapefileSetToZip(
     zip,
