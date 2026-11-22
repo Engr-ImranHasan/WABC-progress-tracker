@@ -20,6 +20,9 @@ import {
 import {
   buildGeoViewport,
   computeWbPolylineSplit,
+  LabelRectBox,
+  layoutMapLabels,
+  MapLabelInput,
   useMapTileSnapshot,
 } from '../utils/geoMap';
 
@@ -270,82 +273,158 @@ export const WbNavigationMapGroup: React.FC<WbMapProps> = ({
           />
         )}
 
-        {/* Nodes WB1..WB38 with smart label de-collision */}
+        {/* Nodes WB1..WB38 with 2D collision-free cartographic label placement */}
         {(() => {
-          let lastLabelX = -9999;
-          let lastLabelY = -9999;
-          const minDist = compact ? 22 : 21;
+          const wp = viewport.project(
+            (wb.washoutCoord || DEFAULT_WASHOUT_COORD).lat,
+            (wb.washoutCoord || DEFAULT_WASHOUT_COORD).lon
+          );
+          const ap = viewport.project(
+            (wb.airValveCoord || DEFAULT_AIR_VALVE_COORD).lat,
+            (wb.airValveCoord || DEFAULT_AIR_VALVE_COORD).lon
+          );
+          // Cover BOTH blue completion tip halo AND dark-blue "Done: ..." pill
+          const tipBox: LabelRectBox = {
+            x: tipScreen.x - (compact ? 8 : 11),
+            y: tipScreen.y - (compact ? 10 : 13),
+            w: compact ? 74 : 102,
+            h: compact ? 20 : 26,
+          };
+          const wpBox: LabelRectBox = {
+            x: wp.x - (compact ? 6 : 8.5),
+            y: wp.y - (compact ? 6 : 8.5),
+            w: compact ? 12 : 17,
+            h: compact ? 12 : 17,
+          };
+          const apBox: LabelRectBox = {
+            x: ap.x - (compact ? 6 : 8.5),
+            y: ap.y - (compact ? 6 : 8.5),
+            w: compact ? 12 : 17,
+            h: compact ? 12 : 17,
+          };
+          const legBox: LabelRectBox = {
+            x: mapX + 3,
+            y: mapY + mapH - (compact ? 40 : 51),
+            w: compact ? 114 : 156,
+            h: compact ? 37 : 48,
+          };
+          const northBox: LabelRectBox = {
+            x: mapX + mapW - (compact ? 32 : 44),
+            y: mapY + 3,
+            w: compact ? 26 : 32,
+            h: compact ? 26 : 32,
+          };
+          const customBoxes: LabelRectBox[] = (wb.customPoints || []).map((cp) => {
+            const cpp = viewport.project(cp.lat, cp.lon);
+            return { x: cpp.x - 7, y: cpp.y - 7, w: 68, h: 15 };
+          });
 
-          return wb.nodes.map((n, idx) => {
+          const projected = wb.nodes.map((n, idx) => {
             const pt = viewport.project(n.lat, n.lon);
-            const col = nodeColors(n.status);
             const isSel = selectedNodeId === n.id;
             const r = isSel ? (compact ? 4.2 : 6.2) : compact ? 2.6 : 4.2;
-            const isBoundary = idx === 0 || idx === wb.nodes.length - 1 || isSel;
-            const farEnough = Math.hypot(pt.x - lastLabelX, pt.y - lastLabelY) >= minDist;
-            const showLabel = isBoundary || ((!compact || idx % 3 === 0) && farEnough);
-            if (showLabel) {
-              lastLabelX = pt.x;
-              lastLabelY = pt.y;
-            }
-            const labelOffsetX = idx % 2 === 0 ? r + 3 : -(r + 3);
-            const anchor = idx % 2 === 0 ? 'start' : 'end';
-
-            return (
-              <g
-                key={n.id}
-                style={{ cursor: onSelectNode ? 'pointer' : 'default' }}
-                onClick={(e) => {
-                  if (onSelectNode) {
-                    e.stopPropagation();
-                    onSelectNode(n.id);
-                  }
-                }}
-              >
-                {isSel && (
-                  <circle
-                    cx={pt.x}
-                    cy={pt.y}
-                    r={r + 3.5}
-                    fill="none"
-                    stroke="#2563eb"
-                    strokeWidth={1.6}
-                  />
-                )}
-                <circle
-                  cx={pt.x}
-                  cy={pt.y}
-                  r={r}
-                  fill={col.fill}
-                  stroke={col.stroke}
-                  strokeWidth={compact ? 0.9 : 1.3}
-                />
-                {showLabel && (
-                  <g>
-                    <rect
-                      x={anchor === 'start' ? pt.x + labelOffsetX - 1 : pt.x + labelOffsetX - (compact ? 17 : 23)}
-                      y={pt.y - (compact ? 4.5 : 6)}
-                      width={compact ? 18 : 24}
-                      height={compact ? 8 : 11}
-                      rx={1.5}
-                      fill="#ffffff"
-                      fillOpacity={0.88}
-                    />
-                    <text
-                      x={pt.x + labelOffsetX}
-                      y={pt.y + (compact ? 1.8 : 2.5)}
-                      textAnchor={anchor}
-                      fontSize={compact ? 4.8 : 6.5}
-                      fontWeight="700"
-                      fill="#0f172a"
-                    >
-                      {n.id}
-                    </text>
-                  </g>
-                )}
-              </g>
-            );
+            return { n, idx, pt, isSel, r };
           });
+
+          const labelItems: MapLabelInput[] = projected
+            .filter(({ idx, isSel }) => !compact || idx === 0 || idx === wb.nodes.length - 1 || isSel || idx % 4 === 0)
+            .map(({ n, idx, pt, isSel, r }) => ({
+              id: n.id,
+              text: n.id,
+              px: pt.x,
+              py: pt.y,
+              markerRadius: r,
+              priority: isSel ? 100 : idx === 0 || idx === wb.nodes.length - 1 ? 85 : idx % 3 === 0 ? 58 : 42,
+              preferredSide: idx % 2 === 0 ? 'right' : 'left',
+              mustPlace: true,
+            }));
+
+          const placed = layoutMapLabels(
+            labelItems,
+            { x: mapX, y: mapY, w: mapW, h: mapH },
+            {
+              fontSize: compact ? 4.7 : 6.1,
+              blockedBoxes: [tipBox, wpBox, apBox, legBox, northBox, ...customBoxes],
+              polylinePoints: projected.map((p) => p.pt),
+              padding: compact ? 2.1 : 2.3,
+              maxTier: compact ? 4 : 5,
+            }
+          );
+
+          return (
+            <g>
+              {projected.map(({ n, pt, isSel, r }) => {
+                const col = nodeColors(n.status);
+                return (
+                  <g
+                    key={n.id}
+                    style={{ cursor: onSelectNode ? 'pointer' : 'default' }}
+                    onClick={(e) => {
+                      if (onSelectNode) {
+                        e.stopPropagation();
+                        onSelectNode(n.id);
+                      }
+                    }}
+                  >
+                    {isSel && (
+                      <circle
+                        cx={pt.x}
+                        cy={pt.y}
+                        r={r + 3.5}
+                        fill="none"
+                        stroke="#2563eb"
+                        strokeWidth={1.6}
+                      />
+                    )}
+                    <circle
+                      cx={pt.x}
+                      cy={pt.y}
+                      r={r}
+                      fill={col.fill}
+                      stroke={col.stroke}
+                      strokeWidth={compact ? 0.9 : 1.3}
+                    />
+                  </g>
+                );
+              })}
+
+              {Array.from(placed.values()).map((lbl) => (
+                <g key={`wb-lbl-${lbl.id}`} style={{ pointerEvents: 'none' }}>
+                  {lbl.needsLeader && (
+                    <line
+                      x1={lbl.px}
+                      y1={lbl.py}
+                      x2={lbl.leaderX2}
+                      y2={lbl.leaderY2}
+                      stroke="#475569"
+                      strokeWidth={0.55}
+                    />
+                  )}
+                  <rect
+                    x={lbl.boxX}
+                    y={lbl.boxY}
+                    width={lbl.boxW}
+                    height={lbl.boxH}
+                    rx={1.8}
+                    fill="#ffffff"
+                    fillOpacity={0.93}
+                    stroke="#cbd5e1"
+                    strokeWidth={0.35}
+                  />
+                  <text
+                    x={lbl.textX}
+                    y={lbl.textY}
+                    textAnchor={lbl.textAnchor}
+                    fontSize={compact ? 4.7 : 6.1}
+                    fontWeight="700"
+                    fill="#0f172a"
+                  >
+                    {lbl.text}
+                  </text>
+                </g>
+              ))}
+            </g>
+          );
         })()}
 
         {/* BLUE CIRCLE MARKER AT COMPLETED TIP ("completion er mathai blue circle") */}
@@ -682,13 +761,25 @@ export const WcNavigationMapGroup: React.FC<WcMapProps> = ({
           );
         })}
 
-        {/* Shaft Node Markers WC-1 .. WC-27 with smart de-collision & white halo */}
+        {/* Shaft Node Markers WC-1 .. WC-27 with 2D collision-free label placement */}
         {(() => {
-          let lastLx = -9999;
-          let lastLy = -9999;
-          const minDist = isTallVertical ? 14 : compact ? 18 : 13;
+          const blocked: LabelRectBox[] = [
+            { x: mapX + mapW - 31, y: mapY + 4, w: 27, h: 27 },
+          ];
+          for (const cp of wc.customPoints || []) {
+            const cpp = viewport.project(cp.lat, cp.lon);
+            blocked.push({ x: cpp.x - 7, y: cpp.y - 7, w: 68, h: 15 });
+          }
+          if (isTallVertical) {
+            blocked.push({
+              x: mapX + 4,
+              y: mapY + mapH - (viewMode !== 'overall' ? 58 : 46),
+              w: 138,
+              h: viewMode !== 'overall' ? 53 : 41,
+            });
+          }
 
-          return wc.geoNodes.map((gNode, idx) => {
+          const projected = wc.geoNodes.map((gNode, idx) => {
             const pt = viewport.project(gNode.lat, gNode.lon);
             const sh = shaftById.get(gNode.id);
             const st = sh ? getShaftStatus(sh) : 'remaining';
@@ -703,72 +794,102 @@ export const WcNavigationMapGroup: React.FC<WcMapProps> = ({
                 sh.castingPct > (prevSh.castingPct ?? 0) ||
                 sh.precastPct > (prevSh.precastPct ?? 0));
             const r = isSel ? (isTallVertical ? 5.8 : compact ? 4.0 : 5.5) : isTallVertical ? 4.4 : compact ? 2.5 : 3.5;
-            const isEnd = idx === 0 || idx === wc.geoNodes.length - 1 || isSel;
-            const farEnough = Math.hypot(pt.x - lastLx, pt.y - lastLy) >= minDist;
-            const showLbl = isTallVertical ? (isEnd || farEnough) : isEnd || ((!compact || idx % 3 === 0) && farEnough);
-            if (showLbl) {
-              lastLx = pt.x;
-              lastLy = pt.y;
-            }
-            let sideRight = idx % 2 === 0;
-            if (isTallVertical) {
-              if (pt.x > mapX + mapW - 44) sideRight = false;
-              else if (pt.x < mapX + 44) sideRight = true;
-            }
-            const lx = sideRight ? pt.x + r + 4 : pt.x - r - 4;
-            const anchor = sideRight ? 'start' : 'end';
-
-            return (
-              <g
-                key={gNode.id}
-                style={{ cursor: onSelectShaft ? 'pointer' : 'default' }}
-                onClick={(e) => {
-                  if (onSelectShaft) {
-                    e.stopPropagation();
-                    onSelectShaft(gNode.id);
-                  }
-                }}
-              >
-                {hasNewShaft && (
-                  <circle cx={pt.x} cy={pt.y} r={r + 3.2} fill="none" stroke={highlightColor} strokeWidth={2.0} />
-                )}
-                {isSel && (
-                  <circle cx={pt.x} cy={pt.y} r={r + 3} fill="none" stroke="#2563eb" strokeWidth={1.6} />
-                )}
-                <circle
-                  cx={pt.x}
-                  cy={pt.y}
-                  r={r}
-                  fill={col.fill}
-                  stroke={col.stroke}
-                  strokeWidth={isTallVertical ? 1.4 : compact ? 0.9 : 1.2}
-                />
-                {showLbl && (
-                  <g>
-                    <rect
-                      x={sideRight ? lx - 1.5 : lx - (isTallVertical ? 28 : compact ? 21 : 25)}
-                      y={pt.y - (isTallVertical ? 6 : compact ? 4.2 : 5.2)}
-                      width={isTallVertical ? 30 : compact ? 22 : 26}
-                      height={isTallVertical ? 11 : compact ? 7.5 : 9.5}
-                      rx={1.5}
-                      fill="#ffffff"
-                      fillOpacity={0.9}
-                    />
-                    <text
-                      x={lx}
-                      y={pt.y + (isTallVertical ? 2.5 : compact ? 1.5 : 2.2)}
-                      textAnchor={anchor}
-                      fontSize={isTallVertical ? 7.2 : compact ? 4.6 : 5.8}
-                      fontWeight="800"
-                      fill="#0f172a"
-                    >
-                      {gNode.id}
-                    </text>
-                  </g>
-                )}
-              </g>
-            );
+            return { gNode, idx, pt, col, isSel, hasNewShaft, r };
           });
+
+          const fSize = isTallVertical ? 6.6 : compact ? 4.6 : 5.8;
+          const labelItems: MapLabelInput[] = projected
+            .filter(({ idx, isSel }) => isTallVertical || idx === 0 || idx === wc.geoNodes.length - 1 || isSel || (!compact ? idx % 2 === 0 : idx % 3 === 0))
+            .map(({ gNode, idx, pt, isSel, r }) => ({
+              id: gNode.id,
+              text: gNode.id,
+              px: pt.x,
+              py: pt.y,
+              markerRadius: r,
+              priority: isSel ? 100 : idx === 0 || idx === wc.geoNodes.length - 1 ? 85 : idx % 2 === 0 ? 55 : 40,
+              preferredSide: idx % 2 === 0 ? 'right' : 'left',
+              mustPlace: isTallVertical || isSel,
+            }));
+
+          const placed = layoutMapLabels(
+            labelItems,
+            { x: mapX, y: mapY, w: mapW, h: mapH },
+            {
+              fontSize: fSize,
+              blockedBoxes: blocked,
+              polylinePoints: projected.map((p) => p.pt),
+              padding: 2.3,
+              maxTier: isTallVertical ? 5 : 3,
+            }
+          );
+
+          return (
+            <g>
+              {projected.map(({ gNode, pt, col, isSel, hasNewShaft, r }) => (
+                <g
+                  key={gNode.id}
+                  style={{ cursor: onSelectShaft ? 'pointer' : 'default' }}
+                  onClick={(e) => {
+                    if (onSelectShaft) {
+                      e.stopPropagation();
+                      onSelectShaft(gNode.id);
+                    }
+                  }}
+                >
+                  {hasNewShaft && (
+                    <circle cx={pt.x} cy={pt.y} r={r + 3.2} fill="none" stroke={highlightColor} strokeWidth={2.0} />
+                  )}
+                  {isSel && (
+                    <circle cx={pt.x} cy={pt.y} r={r + 3} fill="none" stroke="#2563eb" strokeWidth={1.6} />
+                  )}
+                  <circle
+                    cx={pt.x}
+                    cy={pt.y}
+                    r={r}
+                    fill={col.fill}
+                    stroke={col.stroke}
+                    strokeWidth={isTallVertical ? 1.4 : compact ? 0.9 : 1.2}
+                  />
+                </g>
+              ))}
+
+              {Array.from(placed.values()).map((lbl) => (
+                <g key={`wc-lbl-${lbl.id}`} style={{ pointerEvents: 'none' }}>
+                  {lbl.needsLeader && (
+                    <line
+                      x1={lbl.px}
+                      y1={lbl.py}
+                      x2={lbl.leaderX2}
+                      y2={lbl.leaderY2}
+                      stroke="#475569"
+                      strokeWidth={0.6}
+                    />
+                  )}
+                  <rect
+                    x={lbl.boxX}
+                    y={lbl.boxY}
+                    width={lbl.boxW}
+                    height={lbl.boxH}
+                    rx={1.8}
+                    fill="#ffffff"
+                    fillOpacity={0.92}
+                    stroke="#cbd5e1"
+                    strokeWidth={0.38}
+                  />
+                  <text
+                    x={lbl.textX}
+                    y={lbl.textY}
+                    textAnchor={lbl.textAnchor}
+                    fontSize={fSize}
+                    fontWeight="800"
+                    fill="#0f172a"
+                  >
+                    {lbl.text}
+                  </text>
+                </g>
+              ))}
+            </g>
+          );
         })()}
 
         {/* Custom Added Points on Mini WC Map */}
@@ -1031,13 +1152,24 @@ export const WaNavigationMapGroup: React.FC<WaMapProps> = ({
           </text>
         </g>
 
-        {/* WA Shaft Nodes with clean alternating + edge-clamped labels */}
+        {/* WA Shaft Nodes with 2D collision-free cartographic label placement */}
         {(() => {
-          let lastLx = -9999;
-          let lastLy = -9999;
-          const minDist = 14;
+          const blocked: LabelRectBox[] = [
+            { x: spsPt.x - 14, y: spsPt.y - 9, w: 28, h: 18 },
+            { x: mapX + mapW - 31, y: mapY + 4, w: 27, h: 27 },
+            {
+              x: mapX + 4,
+              y: mapY + mapH - (viewMode !== 'overall' ? 70 : 58),
+              w: 138,
+              h: viewMode !== 'overall' ? 64 : 52,
+            },
+          ];
+          for (const cp of customPoints || []) {
+            const cpp = viewport.project(cp.lat, cp.lon);
+            blocked.push({ x: cpp.x - 7, y: cpp.y - 7, w: 68, h: 15 });
+          }
 
-          return nodes.map((gNode, idx) => {
+          const projected = nodes.map((gNode, idx) => {
             const pt = viewport.project(gNode.lat, gNode.lon);
             const sh = shaftById.get(gNode.id);
             const st = sh ? getShaftStatus(sh) : 'remaining';
@@ -1052,94 +1184,135 @@ export const WaNavigationMapGroup: React.FC<WaMapProps> = ({
                 sh.castingPct > (prevSh.castingPct ?? 0) ||
                 sh.precastPct > (prevSh.precastPct ?? 0));
             const r = isSel ? 5.6 : 4.1;
-            const isEnd = idx === 0 || idx === nodes.length - 1 || isSel || gNode.id === 'WA-24.1';
-            const farEnough = Math.hypot(pt.x - lastLx, pt.y - lastLy) >= minDist;
-            const showLbl = isEnd || farEnough;
-            if (showLbl) {
-              lastLx = pt.x;
-              lastLy = pt.y;
-            }
-            let sideRight = idx <= 4 ? idx % 2 === 0 : idx % 2 === 1;
-            if (gNode.id === 'WA-35') sideRight = true;
-            else if (gNode.id === 'WA-36' || gNode.id === 'WA-34') sideRight = false;
-            else if (pt.x > mapX + mapW - 44) sideRight = false;
-            else if (pt.x < mapX + 44) sideRight = true;
-            const lx = sideRight ? pt.x + r + 4 : pt.x - r - 4;
-            const anchor = sideRight ? 'start' : 'end';
-            const dispName = gNode.id.replace('-', ' ');
+            return { gNode, idx, pt, col, isSel, hasNewShaft, r };
+          });
 
-            return (
-              <g
-                key={gNode.id}
-                style={{ cursor: onSelectShaft ? 'pointer' : 'default' }}
-                onClick={(e) => {
-                  if (onSelectShaft) {
-                    e.stopPropagation();
-                    onSelectShaft(gNode.id);
-                  }
-                }}
-              >
-                {hasNewShaft && (
+          const polyPts = [...projected.map((p) => p.pt), spsPt];
+          const labelItems: MapLabelInput[] = projected.map(({ gNode, idx, pt, r }) => {
+            const isKey = idx === 0 || idx === nodes.length - 1 || gNode.id === 'WA-24.1';
+            // In dense horizontal WA-1..WA-6 stretch prefer alternating top/bottom
+            const pref: MapLabelInput['preferredSide'] =
+              idx <= 5
+                ? idx % 2 === 0
+                  ? 'top'
+                  : 'bottom'
+                : idx % 2 === 0
+                ? 'right'
+                : 'left';
+            return {
+              id: gNode.id,
+              text: gNode.id.replace('-', ' '),
+              px: pt.x,
+              py: pt.y,
+              markerRadius: r,
+              priority: selectedShaftId === gNode.id ? 100 : isKey ? 85 : idx % 2 === 0 ? 55 : 42,
+              preferredSide: pref,
+              mustPlace: true,
+            };
+          });
+
+          const placed = layoutMapLabels(
+            labelItems,
+            { x: mapX, y: mapY, w: mapW, h: mapH },
+            {
+              fontSize: 6.4,
+              blockedBoxes: blocked,
+              polylinePoints: polyPts,
+              padding: 2.2,
+              maxTier: 5,
+            }
+          );
+
+          return (
+            <g>
+              {/* Draw all WA Shaft markers first so labels/leaders never cover them */}
+              {projected.map(({ gNode, pt, col, isSel, hasNewShaft, r }) => (
+                <g
+                  key={gNode.id}
+                  style={{ cursor: onSelectShaft ? 'pointer' : 'default' }}
+                  onClick={(e) => {
+                    if (onSelectShaft) {
+                      e.stopPropagation();
+                      onSelectShaft(gNode.id);
+                    }
+                  }}
+                >
+                  {hasNewShaft && (
+                    <rect
+                      x={pt.x - r - 3}
+                      y={pt.y - r - 3}
+                      width={(r + 3) * 2}
+                      height={(r + 3) * 2}
+                      rx={2.5}
+                      fill="none"
+                      stroke={highlightColor}
+                      strokeWidth={2.0}
+                    />
+                  )}
+                  {isSel && (
+                    <rect
+                      x={pt.x - r - 2.8}
+                      y={pt.y - r - 2.8}
+                      width={(r + 2.8) * 2}
+                      height={(r + 2.8) * 2}
+                      rx={2.5}
+                      fill="none"
+                      stroke="#0284c7"
+                      strokeWidth={1.6}
+                    />
+                  )}
                   <rect
-                    x={pt.x - r - 3}
-                    y={pt.y - r - 3}
-                    width={(r + 3) * 2}
-                    height={(r + 3) * 2}
-                    rx={2.5}
-                    fill="none"
-                    stroke={highlightColor}
-                    strokeWidth={2.0}
-                  />
-                )}
-                {isSel && (
-                  <rect
-                    x={pt.x - r - 2.8}
-                    y={pt.y - r - 2.8}
-                    width={(r + 2.8) * 2}
-                    height={(r + 2.8) * 2}
-                    rx={2.5}
-                    fill="none"
-                    stroke="#0284c7"
+                    x={pt.x - r}
+                    y={pt.y - r}
+                    width={r * 2}
+                    height={r * 2}
+                    rx={1.5}
+                    fill="#ffffff"
+                    stroke={col.stroke}
                     strokeWidth={1.6}
                   />
-                )}
-                <rect
-                  x={pt.x - r}
-                  y={pt.y - r}
-                  width={r * 2}
-                  height={r * 2}
-                  rx={1.5}
-                  fill="#ffffff"
-                  stroke={col.stroke}
-                  strokeWidth={1.6}
-                />
-                <circle cx={pt.x} cy={pt.y} r={r * 0.48} fill={col.fill} />
-                {showLbl && (
-                  <g>
-                    <rect
-                      x={sideRight ? lx - 1.5 : lx - 30}
-                      y={pt.y - 6}
-                      width={32}
-                      height={11}
-                      rx={1.5}
-                      fill="#ffffff"
-                      fillOpacity={0.9}
+                  <circle cx={pt.x} cy={pt.y} r={r * 0.48} fill={col.fill} />
+                </g>
+              ))}
+
+              {/* Draw collision-free WA labels + crisp hairline leaders */}
+              {Array.from(placed.values()).map((lbl) => (
+                <g key={`wa-lbl-${lbl.id}`} style={{ pointerEvents: 'none' }}>
+                  {lbl.needsLeader && (
+                    <line
+                      x1={lbl.px}
+                      y1={lbl.py}
+                      x2={lbl.leaderX2}
+                      y2={lbl.leaderY2}
+                      stroke="#475569"
+                      strokeWidth={0.6}
                     />
-                    <text
-                      x={lx}
-                      y={pt.y + 2.5}
-                      textAnchor={anchor}
-                      fontSize={7.2}
-                      fontWeight="800"
-                      fill="#0f172a"
-                    >
-                      {dispName}
-                    </text>
-                  </g>
-                )}
-              </g>
-            );
-          });
+                  )}
+                  <rect
+                    x={lbl.boxX}
+                    y={lbl.boxY}
+                    width={lbl.boxW}
+                    height={lbl.boxH}
+                    rx={1.8}
+                    fill="#ffffff"
+                    fillOpacity={0.93}
+                    stroke="#cbd5e1"
+                    strokeWidth={0.38}
+                  />
+                  <text
+                    x={lbl.textX}
+                    y={lbl.textY}
+                    textAnchor={lbl.textAnchor}
+                    fontSize={6.4}
+                    fontWeight="800"
+                    fill="#0f172a"
+                  >
+                    {lbl.text}
+                  </text>
+                </g>
+              ))}
+            </g>
+          );
         })()}
 
         {/* Custom Added Points */}

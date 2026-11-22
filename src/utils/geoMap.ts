@@ -551,3 +551,332 @@ export async function parseKmlOrKmzOrCsvFile(file: File): Promise<ParsedKmlResul
 
   return { points, lines };
 }
+
+export interface LabelRectBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface MapLabelInput {
+  id: string;
+  text: string;
+  px: number;
+  py: number;
+  markerRadius: number;
+  priority?: number;
+  preferredSide?: 'auto' | 'right' | 'left' | 'top' | 'bottom';
+  mustPlace?: boolean;
+}
+
+export interface PlacedMapLabel {
+  id: string;
+  text: string;
+  px: number;
+  py: number;
+  boxX: number;
+  boxY: number;
+  boxW: number;
+  boxH: number;
+  textX: number;
+  textY: number;
+  textAnchor: 'start' | 'middle' | 'end';
+  leaderX2: number;
+  leaderY2: number;
+  needsLeader: boolean;
+}
+
+function rectsOverlap(a: LabelRectBox, b: LabelRectBox, pad = 1.8): boolean {
+  return !(
+    a.x + a.w + pad <= b.x ||
+    b.x + b.w + pad <= a.x ||
+    a.y + a.h + pad <= b.y ||
+    b.y + b.h + pad <= a.y
+  );
+}
+
+function distPointToSegSq(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-6) return (px - ax) * (px - ax) + (py - ay) * (py - ay);
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+  const cx = ax + t * dx;
+  const cy = ay + t * dy;
+  return (px - cx) * (px - cx) + (py - cy) * (py - cy);
+}
+
+function segIntersectsRect(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  r: LabelRectBox,
+  pad = 1.0
+): boolean {
+  const rx0 = r.x - pad;
+  const ry0 = r.y - pad;
+  const rx1 = r.x + r.w + pad;
+  const ry1 = r.y + r.h + pad;
+
+  const dx = bx - ax;
+  const dy = by - ay;
+  let t0 = 0;
+  let t1 = 1;
+  const p = [-dx, dx, -dy, dy];
+  const q = [ax - rx0, rx1 - ax, ay - ry0, ry1 - ay];
+  for (let i = 0; i < 4; i++) {
+    if (Math.abs(p[i]) < 1e-9) {
+      if (q[i] < 0) return false;
+    } else {
+      const t = q[i] / p[i];
+      if (p[i] < 0) {
+        if (t > t1) return false;
+        if (t > t0) t0 = t;
+      } else {
+        if (t < t0) return false;
+        if (t < t1) t1 = t;
+      }
+    }
+  }
+  return t0 <= t1;
+}
+
+function segsCross(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  dx: number,
+  dy: number
+): boolean {
+  const ccw = (p1x: number, p1y: number, p2x: number, p2y: number, p3x: number, p3y: number) =>
+    (p3y - p1y) * (p2x - p1x) > (p2y - p1y) * (p3x - p1x);
+  return (
+    ccw(ax, ay, cx, cy, dx, dy) !== ccw(bx, by, cx, cy, dx, dy) &&
+    ccw(ax, ay, bx, by, cx, cy) !== ccw(ax, ay, bx, by, dx, dy)
+  );
+}
+
+export function layoutMapLabels(
+  items: MapLabelInput[],
+  bounds: LabelRectBox,
+  options?: {
+    fontSize?: number;
+    blockedBoxes?: LabelRectBox[];
+    polylinePoints?: Array<{ x: number; y: number }>;
+    padding?: number;
+    maxTier?: 2 | 3 | 4 | 5;
+  }
+): Map<string, PlacedMapLabel> {
+  const fontSize = options?.fontSize ?? 6.8;
+  const pad = options?.padding ?? 2.3;
+  const maxTier = options?.maxTier ?? 4;
+  const linePts = options?.polylinePoints ?? [];
+  const charW = fontSize * 0.66;
+  const boxH = fontSize + 4.0;
+
+  // External obstacle boxes (legends, north arrows, SPS, Washout, Air Valve, Done pill)
+  const extObstacles: LabelRectBox[] = [...(options?.blockedBoxes ?? [])];
+  // Per-item marker obstacle boxes (kept parallel to `items` so we skip own marker on leader check)
+  const markerObstacles: Array<{ id: string; box: LabelRectBox }> = items.map((it) => {
+    const mr = Math.max(3, it.markerRadius) + 2.0;
+    return {
+      id: it.id,
+      box: {
+        x: it.px - mr,
+        y: it.py - mr,
+        w: mr * 2,
+        h: mr * 2,
+      },
+    };
+  });
+
+  const placedBoxes: LabelRectBox[] = [];
+  const placedLeaders: Array<{ ax: number; ay: number; bx: number; by: number }> = [];
+  const result = new Map<string, PlacedMapLabel>();
+
+  // Highest priority placed first
+  const ordered = [...items].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+
+  for (const it of ordered) {
+    const boxW = Math.max(20, it.text.length * charW + 6.0);
+    const r = Math.max(3, it.markerRadius);
+
+    interface Candidate {
+      boxX: number;
+      boxY: number;
+      tierPenalty: number;
+      dirTag: string;
+    }
+
+    const baseTiers = [r + 4.8, r + 13.5, r + 24.0, r + 35.5, r + 47.5];
+    const tiers = baseTiers.slice(0, maxTier);
+    const candidates: Candidate[] = [];
+
+    tiers.forEach((gap, tierIdx) => {
+      const tp = tierIdx * 36;
+      const cList: Array<{ bx: number; by: number; dir: string; prefBonus: number }> = [
+        { bx: it.px + gap, by: it.py - boxH / 2, dir: 'right', prefBonus: it.preferredSide === 'right' ? -12 : 0 },
+        { bx: it.px - gap - boxW, by: it.py - boxH / 2, dir: 'left', prefBonus: it.preferredSide === 'left' ? -12 : 0 },
+        { bx: it.px - boxW / 2, by: it.py - gap - boxH, dir: 'top', prefBonus: it.preferredSide === 'top' ? -12 : 2 },
+        { bx: it.px - boxW / 2, by: it.py + gap, dir: 'bottom', prefBonus: it.preferredSide === 'bottom' ? -12 : 2 },
+        { bx: it.px + gap * 0.78, by: it.py - gap * 0.78 - boxH, dir: 'tr', prefBonus: 5 },
+        { bx: it.px - gap * 0.78 - boxW, by: it.py - gap * 0.78 - boxH, dir: 'tl', prefBonus: 5 },
+        { bx: it.px + gap * 0.78, by: it.py + gap * 0.78, dir: 'br', prefBonus: 6 },
+        { bx: it.px - gap * 0.78 - boxW, by: it.py + gap * 0.78, dir: 'bl', prefBonus: 6 },
+      ];
+      if (tierIdx >= 1) {
+        // Extra staggered angles on outer rings so dense 4-node clusters fan cleanly
+        cList.push(
+          { bx: it.px + gap * 0.94, by: it.py - gap * 0.4 - boxH * 0.5, dir: 'ene', prefBonus: 8 },
+          { bx: it.px + gap * 0.94, by: it.py + gap * 0.4 - boxH * 0.5, dir: 'ese', prefBonus: 8 },
+          { bx: it.px - gap * 0.94 - boxW, by: it.py - gap * 0.4 - boxH * 0.5, dir: 'wnw', prefBonus: 8 },
+          { bx: it.px - gap * 0.94 - boxW, by: it.py + gap * 0.4 - boxH * 0.5, dir: 'wsw', prefBonus: 8 }
+        );
+      }
+      for (const c of cList) {
+        candidates.push({
+          boxX: c.bx,
+          boxY: c.by,
+          tierPenalty: tp + c.prefBonus,
+          dirTag: c.dir,
+        });
+      }
+    });
+
+    let best: { cand: Candidate; score: number; clean: boolean } | null = null;
+
+    for (const cand of candidates) {
+      const box: LabelRectBox = { x: cand.boxX, y: cand.boxY, w: boxW, h: boxH };
+
+      if (
+        box.x < bounds.x + 2 ||
+        box.y < bounds.y + 2 ||
+        box.x + box.w > bounds.x + bounds.w - 2 ||
+        box.y + box.h > bounds.y + bounds.h - 2
+      ) {
+        continue;
+      }
+
+      let overlapCount = 0;
+      for (const ob of extObstacles) {
+        if (rectsOverlap(box, ob, pad)) overlapCount++;
+      }
+      for (const mo of markerObstacles) {
+        if (rectsOverlap(box, mo.box, pad)) overlapCount++;
+      }
+      for (const pb of placedBoxes) {
+        if (rectsOverlap(box, pb, pad)) overlapCount++;
+      }
+
+      if (overlapCount > 0 && !it.mustPlace) continue;
+
+      const cx = box.x + box.w / 2;
+      const cy = box.y + box.h / 2;
+      const lx2 = Math.max(box.x, Math.min(box.x + box.w, it.px));
+      const ly2 = Math.max(box.y, Math.min(box.y + box.h, it.py));
+      const distFromMarker = Math.hypot(cx - it.px, cy - it.py);
+      const willDrawLeader = distFromMarker > r + 15;
+
+      // Leader crossing penalty: prevent leader from cutting across ANY label box, obstacle, or prior leader!
+      let leaderCrossPenalty = 0;
+      if (willDrawLeader) {
+        for (const pb of placedBoxes) {
+          if (segIntersectsRect(it.px, it.py, lx2, ly2, pb, 1.4)) {
+            leaderCrossPenalty += 3800;
+          }
+        }
+        for (const ob of extObstacles) {
+          if (segIntersectsRect(it.px, it.py, lx2, ly2, ob, 1.0)) {
+            leaderCrossPenalty += 2600;
+          }
+        }
+        for (const mo of markerObstacles) {
+          if (mo.id !== it.id && segIntersectsRect(it.px, it.py, lx2, ly2, mo.box, 0.5)) {
+            leaderCrossPenalty += 1200;
+          }
+        }
+        for (const pl of placedLeaders) {
+          if (segsCross(it.px, it.py, lx2, ly2, pl.ax, pl.ay, pl.bx, pl.by)) {
+            leaderCrossPenalty += 1800;
+          }
+        }
+      }
+
+      // Polyline proximity penalty so labels sit cleanly off the tunnel line
+      let linePenalty = 0;
+      if (linePts.length >= 2) {
+        let minD2 = Infinity;
+        for (let li = 0; li < linePts.length - 1; li++) {
+          const d2 = distPointToSegSq(
+            cx,
+            cy,
+            linePts[li].x,
+            linePts[li].y,
+            linePts[li + 1].x,
+            linePts[li + 1].y
+          );
+          if (d2 < minD2) minD2 = d2;
+        }
+        if (minD2 < 110) linePenalty = (10.5 - Math.sqrt(minD2)) * 2.8;
+      }
+
+      const score = overlapCount * 6000 + leaderCrossPenalty + cand.tierPenalty + linePenalty;
+      if (!best || score < best.score) {
+        best = { cand, score, clean: overlapCount === 0 };
+      }
+    }
+
+    if (!best) continue;
+    if (!best.clean && !it.mustPlace) continue;
+
+    const chosenBox: LabelRectBox = {
+      x: best.cand.boxX,
+      y: best.cand.boxY,
+      w: boxW,
+      h: boxH,
+    };
+    placedBoxes.push(chosenBox);
+
+    const cx = chosenBox.x + chosenBox.w / 2;
+    const cy = chosenBox.y + chosenBox.h / 2;
+    const leaderX2 = Math.max(chosenBox.x, Math.min(chosenBox.x + chosenBox.w, it.px));
+    const leaderY2 = Math.max(chosenBox.y, Math.min(chosenBox.y + chosenBox.h, it.py));
+    const distFromMarker = Math.hypot(cx - it.px, cy - it.py);
+    const needsLeader = distFromMarker > r + 15;
+    if (needsLeader) {
+      placedLeaders.push({ ax: it.px, ay: it.py, bx: leaderX2, by: leaderY2 });
+    }
+
+    result.set(it.id, {
+      id: it.id,
+      text: it.text,
+      px: it.px,
+      py: it.py,
+      boxX: chosenBox.x,
+      boxY: chosenBox.y,
+      boxW: chosenBox.w,
+      boxH: chosenBox.h,
+      textX: chosenBox.x + chosenBox.w / 2,
+      textY: chosenBox.y + chosenBox.h * 0.72,
+      textAnchor: 'middle',
+      leaderX2,
+      leaderY2,
+      needsLeader,
+    });
+  }
+
+  return result;
+}
+

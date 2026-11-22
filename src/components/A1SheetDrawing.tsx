@@ -222,10 +222,20 @@ export const A1SheetDrawing: React.FC<A1SheetDrawingProps> = ({
           />
           <text
             x={bx + boxW / 2}
-            y={yTop + 9.0}
+            y={yTop + (boxW < 9.2 ? 8.5 : 9.0)}
             textAnchor="middle"
-            fontSize={boxW < 10 ? 3.85 : 4.4}
-            fontWeight="700"
+            fontSize={
+              boxW < 9.2
+                ? pVal >= 100
+                  ? 2.45
+                  : 3.0
+                : boxW < 11
+                ? pVal >= 100
+                  ? 3.05
+                  : 3.6
+                : 4.3
+            }
+            fontWeight={boxW < 9.2 ? '600' : '700'}
             fill={isDarkBg ? '#ffffff' : '#1e3a8a'}
           >
             {pVal}%

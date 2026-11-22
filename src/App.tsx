@@ -9,6 +9,7 @@ import {
   FileSpreadsheet,
   FileText,
   FolderOpen,
+  Globe,
   Image as ImageIcon,
   Languages,
   Layers,
@@ -71,6 +72,11 @@ import {
   importFullExcelWorkbook,
   preloadSectionMapSnapshots,
 } from './utils/exporters';
+import {
+  exportArcGisProPackage,
+  importArcGisDataFile,
+} from './utils/arcgisExport';
+import { exportArcGisProAprxFile } from './utils/aprxBuilder';
 import { A1SheetDrawing } from './components/A1SheetDrawing';
 import { ShaftEditorPanel } from './components/ShaftEditorPanel';
 import { WbEditorPanel } from './components/WbWcEditors';
@@ -102,6 +108,7 @@ export function App() {
   const [showInspector, setShowInspector] = useState<boolean>(true);
   const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
   const [showSavedTime, setShowSavedTime] = useState<boolean>(false);
+  const [showSyncPopup, setShowSyncPopup] = useState<boolean>(false);
   const [requestedEditorTab, setRequestedEditorTab] = useState<{
     tab: 'single' | 'table' | 'settings';
     seq: number;
@@ -133,6 +140,7 @@ export function App() {
   const previewSvgRef = useRef<SVGSVGElement>(null);
   const excelInputRef = useRef<HTMLInputElement | null>(null);
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
+  const arcgisInputRef = useRef<HTMLInputElement | null>(null);
 
   const isBn = state.uiLang === 'bn';
 
@@ -453,7 +461,7 @@ export function App() {
   };
 
   const handleExport = async (
-    kind: 'pdf' | 'png' | 'svg' | 'dxf' | 'xlsx' | 'json' | 'print',
+    kind: 'pdf' | 'png' | 'svg' | 'dxf' | 'xlsx' | 'json' | 'arcgis' | 'aprx' | 'print',
     customSvg?: SVGSVGElement | null,
     customLabel?: string
   ) => {
@@ -463,6 +471,26 @@ export function App() {
     try {
       if (kind === 'print') {
         window.print();
+        return;
+      }
+      if (kind === 'aprx') {
+        setExportBusy(isBn ? 'ArcGIS Pro (.aprx) তৈরি হচ্ছে...' : 'Building ArcGIS Pro (.aprx)...');
+        await exportArcGisProAprxFile(state);
+        showToast(
+          isBn
+            ? 'ArcGIS Pro 3.5.0 প্রজেক্ট (.aprx — WA+WB+WC ৩-ম্যাপ লেআউট) ডাউনলোড হয়েছে!'
+            : 'ArcGIS Pro Project (.aprx — WA+WB+WC in 1 Layout) exported!'
+        );
+        return;
+      }
+      if (kind === 'arcgis') {
+        setExportBusy(isBn ? 'ArcGIS Pro প্যাকেজ তৈরি হচ্ছে...' : 'Building ArcGIS Pro Package...');
+        await exportArcGisProPackage(state);
+        showToast(
+          isBn
+            ? 'ArcGIS Pro GIS প্যাকেজ (.zip — APRX+SHP+GeoJSON) ডাউনলোড হয়েছে!'
+            : 'ArcGIS Pro GIS Package (.zip — APRX+SHP+GeoJSON) exported!'
+        );
         return;
       }
       if (kind === 'xlsx') {
@@ -533,6 +561,43 @@ export function App() {
     } catch (err) {
       console.error(err);
       showToast(isBn ? 'Excel ফাইলটি পড়া যায়নি।' : 'Could not read Excel file.');
+    }
+  };
+
+  const handleArcGisUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const updated = await importArcGisDataFile(file, state);
+      if (updated.updatedCount === 0) {
+        showToast(
+          isBn
+            ? 'ফাইলে WA/WB/WC-এর কোনো ম্যাচিং ID পাওয়া যায়নি।'
+            : 'No matching WA/WB/WC features found in GIS file.'
+        );
+        return;
+      }
+      setState((prev) => ({
+        ...prev,
+        lastSavedAt: new Date().toISOString(),
+        shafts: updated.shafts,
+        pumpStation: updated.pumpStation,
+        wb: updated.wb,
+        wc: updated.wc,
+        waGeoNodes: updated.waGeoNodes,
+        spsCoord: updated.spsCoord,
+      }));
+      showToast(
+        isBn
+          ? `ArcGIS ফাইল থেকে ${updated.updatedCount}টি WA/WB/WC ডাটা আপডেট হয়েছে!`
+          : `Updated ${updated.updatedCount} WA/WB/WC features from ArcGIS file!`
+      );
+    } catch (err) {
+      console.error(err);
+      showToast(
+        isBn ? 'ArcGIS GeoJSON / CSV ফাইল পড়া যায়নি।' : 'Could not parse ArcGIS GeoJSON / CSV file.'
+      );
     }
   };
 
@@ -697,14 +762,47 @@ export function App() {
         className="hidden"
         onChange={handleJsonRestore}
       />
+      <input
+        ref={arcgisInputRef}
+        type="file"
+        accept=".geojson,.json,.csv"
+        className="hidden"
+        onChange={handleArcGisUpload}
+      />
 
       {/* ==================== SINGLE-LINE TOP HEADER TOOLBAR ==================== */}
       <header className="no-print z-30 flex flex-nowrap items-center justify-between gap-2 border-b border-slate-700/80 bg-slate-900 px-3 py-1.5 text-white shadow-sm">
         {/* Brand & Compact Green Autosave Tick (Click to view saved timestamp) */}
         <div className="relative flex shrink-0 items-center gap-1.5">
-          <h1 className="whitespace-nowrap text-[13px] font-bold tracking-tight text-white">
-            WABC Progress Studio
-          </h1>
+          <div
+            className="relative flex items-center"
+            onMouseEnter={() => setShowSyncPopup(true)}
+            onMouseLeave={() => setShowSyncPopup(false)}
+          >
+            <h1
+              data-testid="app-brand-title"
+              className="cursor-default whitespace-nowrap text-[15.5px] font-extrabold tracking-tight text-white transition hover:text-emerald-200"
+            >
+              WABC Progress Studio
+            </h1>
+
+            {showSyncPopup && (
+              <div
+                data-testid="sync-status-popup"
+                className="pointer-events-none absolute left-0 top-7 z-50 w-max rounded-lg border border-emerald-500/45 bg-slate-900/95 px-3 py-2 text-[11.5px] font-medium text-slate-100 shadow-2xl ring-1 ring-white/10 backdrop-blur-sm"
+              >
+                <div className="flex items-center gap-2 whitespace-nowrap py-0.5">
+                  <span className="sync-dot-blink inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-400" />
+                  <span>Sync with Autodesk AutoCAD 2021</span>
+                </div>
+                <div className="my-1 border-t border-slate-700/70" />
+                <div className="flex items-center gap-2 whitespace-nowrap py-0.5">
+                  <span className="sync-dot-blink inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-400" />
+                  <span>Sync with ArcGIS Pro 3.5.0</span>
+                </div>
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => setShowSavedTime((v) => !v)}
@@ -895,6 +993,32 @@ export function App() {
                     className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-slate-50"
                   >
                     <FileCode2 className="h-4 w-4 text-amber-600" /> AutoCAD (.dxf) File
+                  </button>
+
+                  <div className="my-1 border-t border-slate-100" />
+                  <div className="px-3 py-1 text-[10px] font-bold uppercase text-slate-400">
+                    {isBn ? 'ArcGIS Pro ও GIS লেয়ার (WA+WB+WC)' : 'ArcGIS Pro & GIS (WA+WB+WC)'}
+                  </div>
+                  <button
+                    onClick={() => handleExport('aprx')}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sky-50 text-sky-900 font-bold"
+                  >
+                    <Globe className="h-4 w-4 text-emerald-600 shrink-0" /> ArcGIS Pro Project (.aprx — 3 Maps Layout)
+                  </button>
+                  <button
+                    onClick={() => handleExport('arcgis')}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sky-50 text-sky-800 font-semibold"
+                  >
+                    <Globe className="h-4 w-4 text-sky-600 shrink-0" /> ArcGIS Pro Package (.zip: APRX+SHP+GeoJSON)
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      arcgisInputRef.current?.click();
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sky-50 text-sky-800 font-medium"
+                  >
+                    <Upload className="h-4 w-4 text-sky-600 shrink-0" /> Update from ArcGIS (.geojson/.csv)
                   </button>
 
                   <div className="my-1 border-t border-slate-100" />
