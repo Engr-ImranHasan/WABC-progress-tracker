@@ -27,6 +27,7 @@ import {
   resizeShaftLayers,
   resolveDisplayContext,
 } from './calculations';
+import { buildR2007HeaderAndPrologue, buildR2007ObjectsEpilogue } from './dxfTemplate';
 import {
   createInitialWbData,
   createInitialWcData,
@@ -786,10 +787,33 @@ const SKIP_SOLID_BG_COLORS = new Set([
   '#fee2e2',
   '#dcfce7',
   '#e2e8f0',
-  '#f1f5f9',
+  '#fdf2f8',
+  '#fce7f3',
+  '#fbcfe8',
+  '#fae8ff',
+  '#f5d0fe',
+  '#f3e8ff',
+  '#e9d5ff',
+  '#e0e7ff',
+  '#e0f2fe',
+  '#ecfccb',
+  '#f0fdfa',
+  '#fef9c3',
   '#1e3a8a', // Dark table/title header bar: outline + adaptive text keeps AutoCAD 100% legible!
   '#0f172a',
 ]);
+
+function shouldSkipSolidFill(fillRaw: string, hasStroke: boolean): boolean {
+  if (!fillRaw || SKIP_SOLID_BG_COLORS.has(fillRaw)) return true;
+  if (hasStroke && /^#[0-9a-f]{6}$/.test(fillRaw)) {
+    const r = parseInt(fillRaw.slice(1, 3), 16);
+    const g = parseInt(fillRaw.slice(3, 5), 16);
+    const b = parseInt(fillRaw.slice(5, 7), 16);
+    // Light/pastel badge & callout fills: outline-only keeps overlaid text legible in CAD
+    if (Math.min(r, g, b) >= 165 && Math.max(r, g, b) >= 210) return true;
+  }
+  return false;
+}
 
 type Mat2D = [number, number, number, number, number, number];
 const MAT_ID: Mat2D = [1, 0, 0, 1, 0, 0];
@@ -856,14 +880,38 @@ function sanitizeDxfText(raw: string): string {
     .replace(/\r?\n/g, ' ')
     .replace(/\u2014|\u2013/g, '-')
     .replace(/\u2192/g, '->')
+    .replace(/\u2264/g, '<=')
+    .replace(/\u2265/g, '>=')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
+function estimateArialWidthFactor(
+  txt: string,
+  hMm: number,
+  targetWidthMm: number
+): number {
+  if (!txt || hMm <= 0 || targetWidthMm <= 0) return 0.88;
+  let units = 0;
+  for (let i = 0; i < txt.length; i++) {
+    const ch = txt[i];
+    if ("ilIjft.,;:|!'/\\()[] ".includes(ch)) units += 0.42;
+    else if ('WMmwOQDG@%&'.includes(ch)) units += 1.02;
+    else if (ch >= 'A' && ch <= 'Z') units += 0.82;
+    else if (ch >= '0' && ch <= '9') units += 0.72;
+    else units += 0.68;
+  }
+  const estAt1 = Math.max(0.1, units * hMm);
+  const ratio = targetWidthMm / estAt1;
+  return Math.max(0.76, Math.min(0.94, ratio));
+}
+
 /**
- * Generates an AutoCAD R12 (AC1009) ASCII DXF file directly from the active A1 SVG drawing
- * (841x594mm Landscape or 594x841mm Portrait) with full $EXTMIN/$EXTMAX/VPORT framing so
- * AutoCAD, TrueView, BricsCAD, and LibreCAD open zoomed-to-fit with 100% vector accuracy.
+ * Generates an AutoCAD R2007 (AC1021, UTF-8) ASCII DXF file directly from the active A1 SVG drawing
+ * (841x594mm Landscape or 594x841mm Portrait) with universal TrueType Arial / Arial Bold STYLE
+ * definitions (AcDbTextStyleTableRecord + ACAD XData), full UTF-8 degree/diameter/Bangla text,
+ * exact rotation/alignment (72/73), and A1 VPORT/LAYOUT framing so AutoCAD, Civil 3D, TrueView,
+ * BricsCAD, and LibreCAD all open with identical fonts and zero drift.
  */
 export function exportAutoCadDxf(
   state: AppState,
@@ -876,91 +924,39 @@ export function exportAutoCadDxf(
   const W = spec.widthMm;
   const H = spec.heightMm;
 
-  const lines: string[] = [];
+  let handleSeq = 0x100;
+  const allocHandle = () => (handleSeq++).toString(16).toUpperCase();
+
+  const entityLines: string[] = [];
   const push = (...vals: (string | number)[]) => {
-    for (const v of vals) lines.push(String(v));
+    for (const v of vals) entityLines.push(String(v));
   };
 
-  // ==================== HEADER SECTION (AutoCAD R12 AC1009) ====================
-  push(
-    0, 'SECTION',
-    2, 'HEADER',
-    9, '$ACADVER', 1, 'AC1009',
-    9, '$INSBASE', 10, '0.0', 20, '0.0', 30, '0.0',
-    9, '$EXTMIN', 10, '0.0', 20, '0.0', 30, '0.0',
-    9, '$EXTMAX', 10, W.toFixed(2), 20, H.toFixed(2), 30, '0.0',
-    9, '$LIMMIN', 10, '0.0', 20, '0.0',
-    9, '$LIMMAX', 10, W.toFixed(2), 20, H.toFixed(2),
-    9, '$INSUNITS', 70, 4,
-    9, '$MEASUREMENT', 70, 1,
-    0, 'ENDSEC'
-  );
-
-  // ==================== TABLES SECTION ====================
-  push(0, 'SECTION', 2, 'TABLES');
-
-  // VPORT (*ACTIVE centered on full A1 sheet!)
-  push(
-    0, 'TABLE', 2, 'VPORT', 70, 1,
-    0, 'VPORT', 2, '*ACTIVE', 70, 0,
-    10, '0.0', 20, '0.0',
-    11, '1.0', 21, '1.0',
-    12, (W / 2).toFixed(2), 22, (H / 2).toFixed(2),
-    13, '0.0', 23, '0.0',
-    14, '10.0', 24, '10.0',
-    15, '10.0', 25, '10.0',
-    16, '0.0', 26, '0.0', 36, '1.0',
-    17, '0.0', 27, '0.0', 37, '0.0',
-    40, (H * 1.05).toFixed(2),
-    41, (W / H).toFixed(4),
-    42, '50.0', 43, '0.0', 44, '0.0',
-    50, '0.0', 51, '0.0',
-    71, 0, 72, 100, 73, 1, 74, 3, 75, 0, 76, 0, 77, 0, 78, 0,
-    0, 'ENDTAB'
-  );
-
-  // LTYPE
-  push(
-    0, 'TABLE', 2, 'LTYPE', 70, 2,
-    0, 'LTYPE', 2, 'CONTINUOUS', 70, 0, 3, 'Solid line', 72, 65, 73, 0, 40, '0.0',
-    0, 'LTYPE', 2, 'DASHED', 70, 0, 3, 'Dashed __ __ __', 72, 65, 73, 2, 40, '4.0', 49, '2.5', 49, '-1.5',
-    0, 'ENDTAB'
-  );
-
-  // LAYER
-  const layerDefs: Array<[string, number, string?]> = [
-    ['0', 7],
-    ['CAD_FRAME', 5],
-    ['CAD_GRID', 8, 'DASHED'],
-    ['CAD_FILLS', 7],
-    ['CAD_GEOMETRY', 7],
-    ['CAD_TEXT', 7],
-  ];
-  push(0, 'TABLE', 2, 'LAYER', 70, layerDefs.length);
-  for (const [name, col, lt] of layerDefs) {
-    push(0, 'LAYER', 2, name, 70, 0, 62, col, 6, lt || 'CONTINUOUS');
-  }
-  push(0, 'ENDTAB');
-
-  // STYLE
-  push(
-    0, 'TABLE', 2, 'STYLE', 70, 1,
-    0, 'STYLE', 2, 'STANDARD', 70, 0, 40, '0.0', 41, '1.0', 50, '0.0', 71, 0, 42, '2.0', 3, 'txt', 4, '',
-    0, 'ENDTAB'
-  );
-
-  push(0, 'ENDSEC');
-
-  // ==================== BLOCKS SECTION ====================
-  push(0, 'SECTION', 2, 'BLOCKS', 0, 'ENDSEC');
-
-  // ==================== ENTITIES SECTION ====================
   push(0, 'SECTION', 2, 'ENTITIES');
 
-  const emitLine = (layer: string, color: number, x1: number, y1: number, x2: number, y2: number, dashed = false) => {
-    push(0, 'LINE', 8, layer, 62, color);
+  const emitLine = (
+    layer: string,
+    color: number,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    dashed = false
+  ) => {
+    push(
+      0, 'LINE',
+      5, allocHandle(),
+      330, '17',
+      100, 'AcDbEntity',
+      8, layer
+    );
     if (dashed) push(6, 'DASHED');
-    push(10, x1.toFixed(3), 20, y1.toFixed(3), 30, '0.0', 11, x2.toFixed(3), 21, y2.toFixed(3), 31, '0.0');
+    push(
+      62, color,
+      100, 'AcDbLine',
+      10, x1.toFixed(3), 20, y1.toFixed(3), 30, '0.0',
+      11, x2.toFixed(3), 21, y2.toFixed(3), 31, '0.0'
+    );
   };
 
   const emitSolidQuad = (
@@ -973,7 +969,13 @@ export function exportAutoCadDxf(
   ) => {
     // DXF SOLID requires Z-order (top-left, top-right, bottom-left, bottom-right)
     push(
-      0, 'SOLID', 8, layer, 62, color,
+      0, 'SOLID',
+      5, allocHandle(),
+      330, '17',
+      100, 'AcDbEntity',
+      8, layer,
+      62, color,
+      100, 'AcDbTrace',
       10, p0.x.toFixed(3), 20, p0.y.toFixed(3), 30, '0.0',
       11, p1.x.toFixed(3), 21, p1.y.toFixed(3), 31, '0.0',
       12, p3.x.toFixed(3), 22, p3.y.toFixed(3), 32, '0.0',
@@ -981,23 +983,49 @@ export function exportAutoCadDxf(
     );
   };
 
-  const emitPolyline = (layer: string, color: number, pts: Array<{ x: number; y: number }>, closed: boolean, dashed = false) => {
+  const emitPolyline = (
+    layer: string,
+    color: number,
+    pts: Array<{ x: number; y: number }>,
+    closed: boolean,
+    dashed = false
+  ) => {
     if (pts.length < 2) return;
     if (pts.length === 2 && !closed) {
       emitLine(layer, color, pts[0].x, pts[0].y, pts[1].x, pts[1].y, dashed);
       return;
     }
-    push(0, 'POLYLINE', 8, layer, 62, color);
+    push(
+      0, 'LWPOLYLINE',
+      5, allocHandle(),
+      330, '17',
+      100, 'AcDbEntity',
+      8, layer
+    );
     if (dashed) push(6, 'DASHED');
-    push(66, 1, 70, closed ? 1 : 0, 10, '0.0', 20, '0.0', 30, '0.0');
+    push(
+      62, color,
+      100, 'AcDbPolyline',
+      90, pts.length,
+      70, closed ? 1 : 0
+    );
     for (const pt of pts) {
-      push(0, 'VERTEX', 8, layer, 10, pt.x.toFixed(3), 20, pt.y.toFixed(3), 30, '0.0');
+      push(10, pt.x.toFixed(3), 20, pt.y.toFixed(3));
     }
-    push(0, 'SEQEND', 8, layer);
   };
 
   const emitCircle = (layer: string, color: number, cx: number, cy: number, r: number) => {
-    push(0, 'CIRCLE', 8, layer, 62, color, 10, cx.toFixed(3), 20, cy.toFixed(3), 30, '0.0', 40, Math.max(0.1, r).toFixed(3));
+    push(
+      0, 'CIRCLE',
+      5, allocHandle(),
+      330, '17',
+      100, 'AcDbEntity',
+      8, layer,
+      62, color,
+      100, 'AcDbCircle',
+      10, cx.toFixed(3), 20, cy.toFixed(3), 30, '0.0',
+      40, Math.max(0.1, r).toFixed(3)
+    );
   };
 
   const emitText = (
@@ -1007,15 +1035,46 @@ export function exportAutoCadDxf(
     y: number,
     h: number,
     txt: string,
-    anchor: string
+    anchor: string,
+    vBase = 'auto',
+    rotDeg = 0,
+    isBold = false,
+    widthFactor = 0.88
   ) => {
     const clean = sanitizeDxfText(txt);
     if (!clean) return;
     const hAlign = anchor === 'middle' ? 1 : anchor === 'end' ? 2 : 0;
+    const vAlign =
+      vBase === 'middle' || vBase === 'central'
+        ? 2
+        : vBase === 'hanging' || vBase === 'text-before-edge'
+        ? 3
+        : 0;
     const safeH = Math.max(0.75, h);
-    push(0, 'TEXT', 8, layer, 62, color, 10, x.toFixed(3), 20, y.toFixed(3), 30, '0.0', 40, safeH.toFixed(3), 1, clean);
-    if (hAlign !== 0) {
+    const styleName = isBold ? 'CAD_BOLD' : 'Standard';
+    push(
+      0, 'TEXT',
+      5, allocHandle(),
+      330, '17',
+      100, 'AcDbEntity',
+      8, layer,
+      62, color,
+      100, 'AcDbText',
+      10, x.toFixed(3),
+      20, y.toFixed(3),
+      30, '0.0',
+      40, safeH.toFixed(3),
+      1, clean,
+      50, rotDeg.toFixed(2),
+      41, widthFactor.toFixed(3),
+      7, styleName
+    );
+    if (hAlign !== 0 || vAlign !== 0) {
       push(72, hAlign, 11, x.toFixed(3), 21, y.toFixed(3), 31, '0.0');
+    }
+    push(100, 'AcDbText');
+    if (vAlign !== 0) {
+      push(73, vAlign);
     }
   };
 
@@ -1074,7 +1133,7 @@ export function exportAutoCadDxf(
         const isOuterTintBox = rw * sxMm > 140 && rh * syMm > 60;
         if (
           fillRaw &&
-          !SKIP_SOLID_BG_COLORS.has(fillRaw) &&
+          !shouldSkipSolidFill(fillRaw, hasStroke) &&
           (!Number.isFinite(fillOpacity) || fillOpacity >= 0.35) &&
           !isOuterTintBox
         ) {
@@ -1107,7 +1166,7 @@ export function exportAutoCadDxf(
         if (
           tag === 'polygon' &&
           fillRaw &&
-          !SKIP_SOLID_BG_COLORS.has(fillRaw) &&
+          !shouldSkipSolidFill(fillRaw, hasStroke) &&
           (!Number.isFinite(fillOpacity) || fillOpacity >= 0.35)
         ) {
           if (pts.length === 3) {
@@ -1116,7 +1175,7 @@ export function exportAutoCadDxf(
             emitSolidQuad('CAD_FILLS', fillAci, pts[0], pts[1], pts[2], pts[3]);
           }
         }
-        if (hasStroke || (tag === 'polygon' && fillRaw && !SKIP_SOLID_BG_COLORS.has(fillRaw))) {
+        if (hasStroke || (tag === 'polygon' && fillRaw && !shouldSkipSolidFill(fillRaw, hasStroke))) {
           emitPolyline('CAD_GEOMETRY', hasStroke ? strokeAci : fillAci, pts, tag === 'polygon', dash);
         }
       } else if (tag === 'circle') {
@@ -1138,7 +1197,7 @@ export function exportAutoCadDxf(
         let cmd = '';
         let i = 0;
         const flushSub = (closed: boolean) => {
-          if (subPts.length >= 2 && (hasStroke || !SKIP_SOLID_BG_COLORS.has(fillRaw))) {
+          if (subPts.length >= 2 && (hasStroke || !shouldSkipSolidFill(fillRaw, hasStroke))) {
             emitPolyline('CAD_GEOMETRY', hasStroke ? strokeAci : fillAci, subPts, closed, dash);
           }
           subPts = [];
@@ -1199,21 +1258,263 @@ export function exportAutoCadDxf(
       } else if (tag === 'text') {
         // Skip white SVG halo outline strokes behind HaloText
         if (hasStroke && strokeRaw === '#ffffff') return;
-        const tx = Number(el.getAttribute('x') || '0');
-        const ty = Number(el.getAttribute('y') || '0');
-        const fSize = Number(el.getAttribute('font-size') || '7');
-        const anchor = (el.getAttribute('text-anchor') || 'start').toLowerCase();
-        const pt = toMm(mat, tx, ty);
-        const scaleApprox = Math.hypot(mat[2], mat[3]) * syMm;
-        const txtAci = fillRaw === '#ffffff' ? 7 : cssColorToAci(fillRaw, 7, true);
-        const joinedTxt =
-          el.children.length > 0
-            ? Array.from(el.childNodes)
-                .map((n) => (n.textContent || '').trim())
-                .filter(Boolean)
-                .join(' ')
-            : el.textContent || '';
-        emitText('CAD_TEXT', txtAci, pt.x, pt.y, fSize * scaleApprox * 0.72, joinedTxt, anchor);
+
+        const cs = typeof window !== 'undefined' ? window.getComputedStyle(el) : null;
+        const baseX = Number(el.getAttribute('x') || '0');
+        const baseY = Number(el.getAttribute('y') || '0');
+        const baseFontSize =
+          Number(el.getAttribute('font-size')) ||
+          (cs ? parseFloat(cs.fontSize) : 0) ||
+          7;
+        const baseAnchor = (
+          el.getAttribute('text-anchor') ||
+          cs?.textAnchor ||
+          'start'
+        ).toLowerCase();
+        const baseDomBaseline = (
+          el.getAttribute('dominant-baseline') ||
+          cs?.dominantBaseline ||
+          'auto'
+        ).toLowerCase();
+        const baseFw = String(el.getAttribute('font-weight') || cs?.fontWeight || '400');
+        const baseIsBold = baseFw === 'bold' || Number(baseFw) >= 600;
+        const baseTxtAci = fillRaw === '#ffffff' ? 7 : cssColorToAci(fillRaw, 7, true);
+
+        const scaleX = Math.hypot(mat[0] * sxMm, mat[1] * syMm);
+        const scaleY = Math.hypot(mat[2] * sxMm, mat[3] * syMm);
+        const rotDeg =
+          Math.atan2(-mat[1] * syMm, mat[0] * sxMm) * (180 / Math.PI);
+        const cleanRot = Math.abs(rotDeg) < 0.05 ? 0 : rotDeg;
+
+        const emitSingleSpan = (
+          rawStr: string,
+          ux: number,
+          uy: number,
+          fSize: number,
+          anchorStr: string,
+          vBaseStr: string,
+          isB: boolean,
+          aci: number,
+          lenSource?: SVGTextContentElement | null
+        ) => {
+          const cleanRaw = rawStr.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+          if (!cleanRaw) return;
+          const pt = toMm(mat, ux, uy);
+          const hMm = Math.max(0.75, fSize * scaleY * 0.716);
+          let targetW = 0;
+          if (lenSource && typeof lenSource.getComputedTextLength === 'function') {
+            try {
+              const svgLen = lenSource.getComputedTextLength();
+              if (Number.isFinite(svgLen) && svgLen > 0) {
+                targetW = svgLen * scaleX;
+              }
+            } catch {
+              // Ignore offscreen measurement errors
+            }
+          }
+          const wf = estimateArialWidthFactor(cleanRaw, hMm, targetW);
+          emitText(
+            'CAD_TEXT',
+            aci,
+            pt.x,
+            pt.y,
+            hMm,
+            cleanRaw,
+            anchorStr,
+            vBaseStr,
+            cleanRot,
+            isB,
+            wf
+          );
+        };
+
+        const tspans = Array.from(el.children).filter(
+          (c) => c.tagName.toLowerCase() === 'tspan'
+        );
+
+        if (tspans.length === 0) {
+          emitSingleSpan(
+            el.textContent || '',
+            baseX,
+            baseY,
+            baseFontSize,
+            baseAnchor,
+            baseDomBaseline,
+            baseIsBold,
+            baseTxtAci,
+            el as unknown as SVGTextContentElement
+          );
+        } else {
+          // Check if children split into distinct lines/positions or distinct inline styled chunks
+          const hasExplicitLineOrOffset = tspans.some(
+            (ts) =>
+              ts.hasAttribute('x') ||
+              ts.hasAttribute('y') ||
+              ts.hasAttribute('dy') ||
+              ts.hasAttribute('dx') ||
+              ts.hasAttribute('font-size') ||
+              ts.hasAttribute('fill')
+          );
+
+          if (!hasExplicitLineOrOffset) {
+            const joined = Array.from(el.childNodes)
+              .map((n) => (n.textContent || '').trim())
+              .filter(Boolean)
+              .join(' ');
+            emitSingleSpan(
+              joined,
+              baseX,
+              baseY,
+              baseFontSize,
+              baseAnchor,
+              baseDomBaseline,
+              baseIsBold,
+              baseTxtAci,
+              el as unknown as SVGTextContentElement
+            );
+          } else {
+            let curX = baseX;
+            let curY = baseY;
+            let charOffset = 0;
+            let pendingTextRaw = '';
+            let pendingTextStartOffset = 0;
+
+            const flushPendingTextNodes = () => {
+              const trimmed = pendingTextRaw.replace(/\s+/g, ' ').trim();
+              if (trimmed) {
+                let tx = curX;
+                let ty = curY;
+                let anch = baseAnchor;
+                let vB = baseDomBaseline;
+                let customLenMm = 0;
+                const svgTextEl = el as unknown as SVGTextContentElement;
+                if (typeof svgTextEl.getStartPositionOfChar === 'function') {
+                  try {
+                    const firstNonWs = pendingTextRaw.search(/\S/);
+                    const startIdx = pendingTextStartOffset + Math.max(0, firstNonWs);
+                    const pos = svgTextEl.getStartPositionOfChar(startIdx);
+                    tx = pos.x;
+                    ty = pos.y;
+                    anch = 'start';
+                    vB = 'auto';
+                    if (typeof svgTextEl.getSubStringLength === 'function') {
+                      const trimmedLen = pendingTextRaw.trim().length;
+                      if (trimmedLen > 0) {
+                        const subLen = svgTextEl.getSubStringLength(startIdx, trimmedLen);
+                        if (Number.isFinite(subLen) && subLen > 0) {
+                          customLenMm = subLen * scaleX;
+                        }
+                      }
+                    }
+                  } catch {
+                    // Fallback to cursor
+                  }
+                }
+                const pt = toMm(mat, tx, ty);
+                const hMm = Math.max(0.75, baseFontSize * scaleY * 0.716);
+                const wf = estimateArialWidthFactor(trimmed, hMm, customLenMm);
+                emitText(
+                  'CAD_TEXT',
+                  baseTxtAci,
+                  pt.x,
+                  pt.y,
+                  hMm,
+                  trimmed,
+                  anch,
+                  vB,
+                  cleanRot,
+                  baseIsBold,
+                  wf
+                );
+              }
+              pendingTextRaw = '';
+            };
+
+            for (const node of Array.from(el.childNodes)) {
+              const rawNodeText = node.textContent || '';
+              if (node.nodeType === Node.TEXT_NODE) {
+                if (!pendingTextRaw) pendingTextStartOffset = charOffset;
+                pendingTextRaw += rawNodeText;
+                charOffset += rawNodeText.length;
+              } else if (
+                node.nodeType === Node.ELEMENT_NODE &&
+                (node as Element).tagName.toLowerCase() === 'tspan'
+              ) {
+                flushPendingTextNodes();
+                const ts = node as Element;
+                const trimmed = rawNodeText.replace(/\s+/g, ' ').trim();
+                const xAttr = ts.getAttribute('x');
+                const yAttr = ts.getAttribute('y');
+                const dxAttr = ts.getAttribute('dx');
+                const dyAttr = ts.getAttribute('dy');
+                if (xAttr !== null) curX = Number(xAttr);
+                if (yAttr !== null) curY = Number(yAttr);
+                if (dxAttr !== null) curX += Number(dxAttr) || 0;
+                if (dyAttr !== null) curY += Number(dyAttr) || 0;
+
+                const tsCs =
+                  typeof window !== 'undefined' ? window.getComputedStyle(ts) : null;
+                const tsSize =
+                  Number(ts.getAttribute('font-size')) ||
+                  (tsCs ? parseFloat(tsCs.fontSize) : 0) ||
+                  baseFontSize;
+                const tsAnchor = (
+                  ts.getAttribute('text-anchor') ||
+                  baseAnchor ||
+                  'start'
+                ).toLowerCase();
+                const tsVBase = (
+                  ts.getAttribute('dominant-baseline') ||
+                  baseDomBaseline ||
+                  'auto'
+                ).toLowerCase();
+                const tsFw = String(
+                  ts.getAttribute('font-weight') || tsCs?.fontWeight || baseFw
+                );
+                const tsBold = tsFw === 'bold' || Number(tsFw) >= 600;
+                const tsFill = (ts.getAttribute('fill') || fillRaw).trim().toLowerCase();
+                const tsAci =
+                  tsFill === '#ffffff' ? 7 : cssColorToAci(tsFill, baseTxtAci, true);
+
+                let sx = curX;
+                let sy = curY;
+                let finalAnchor = tsAnchor;
+                let finalVBase = tsVBase;
+                const tsSvg = ts as unknown as SVGTextContentElement;
+                if (
+                  typeof tsSvg.getStartPositionOfChar === 'function' &&
+                  trimmed.length > 0
+                ) {
+                  try {
+                    const firstNonWs = rawNodeText.search(/\S/);
+                    const pos = tsSvg.getStartPositionOfChar(Math.max(0, firstNonWs));
+                    sx = pos.x;
+                    sy = pos.y;
+                    finalAnchor = 'start';
+                    finalVBase = 'auto';
+                  } catch {
+                    // Fallback to cursor
+                  }
+                }
+                if (trimmed) {
+                  emitSingleSpan(
+                    trimmed,
+                    sx,
+                    sy,
+                    tsSize,
+                    finalAnchor,
+                    finalVBase,
+                    tsBold,
+                    tsAci,
+                    tsSvg
+                  );
+                }
+                charOffset += rawNodeText.length;
+              }
+            }
+            flushPendingTextNodes();
+          }
+        }
       }
     };
 
@@ -1239,11 +1540,21 @@ export function exportAutoCadDxf(
       H - 24,
       4.0,
       `${state.settings.sectionTitle} | Shafts: ${summary.completedShafts}/${summary.totalShafts}`,
-      'start'
+      'start',
+      'auto',
+      0,
+      true,
+      0.88
     );
   }
 
-  push(0, 'ENDSEC', 0, 'EOF');
-  const dxfBytes = lines.join('\r\n') + '\r\n';
+  push(0, 'ENDSEC');
+  const handseedHex = allocHandle();
+  const fullLines = [
+    ...buildR2007HeaderAndPrologue(W, H, handseedHex),
+    ...entityLines,
+    ...buildR2007ObjectsEpilogue(W, H),
+  ];
+  const dxfBytes = fullLines.join('\r\n') + '\r\n';
   triggerDownload(new Blob([dxfBytes], { type: 'application/dxf' }), filename);
 }

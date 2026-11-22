@@ -619,44 +619,6 @@ export const WbEditorPanel: React.FC<WbEditorPanelProps> = ({
                 }
                 className="w-full accent-emerald-600"
               />
-              <div className="grid grid-cols-5 gap-1 text-[10px]">
-                {[25, 50, 100].map((inc) => (
-                  <button
-                    key={inc}
-                    onClick={() =>
-                      onUpdateWb((prev) => ({
-                        ...prev,
-                        completedLengthM: Math.min(prev.totalLengthM, Number((prev.completedLengthM + inc).toFixed(1))),
-                      }))
-                    }
-                    className="rounded border border-emerald-300 bg-white py-0.5 font-bold text-emerald-800 hover:bg-emerald-100"
-                  >
-                    +{inc}m
-                  </button>
-                ))}
-                <button
-                  onClick={() =>
-                    onUpdateWb((prev) => ({
-                      ...prev,
-                      completedLengthM: Number((prev.totalLengthM * 0.5).toFixed(1)),
-                    }))
-                  }
-                  className="rounded border border-blue-300 bg-white py-0.5 font-bold text-blue-800 hover:bg-blue-50"
-                >
-                  50%
-                </button>
-                <button
-                  onClick={() =>
-                    onUpdateWb((prev) => ({
-                      ...prev,
-                      completedLengthM: prev.totalLengthM,
-                    }))
-                  }
-                  className="rounded border border-emerald-700 bg-emerald-600 py-0.5 font-bold text-white hover:bg-emerald-700"
-                >
-                  100%
-                </button>
-              </div>
               <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-rose-500">
                 <div
                   className="h-full bg-emerald-600 transition-all"
