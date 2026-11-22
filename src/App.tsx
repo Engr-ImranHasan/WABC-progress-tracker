@@ -13,6 +13,7 @@ import {
   Image as ImageIcon,
   Languages,
   Layers,
+  Lock,
   Maximize2,
   Minimize2,
   PanelRightClose,
@@ -80,6 +81,7 @@ import { A1SheetDrawing } from './components/A1SheetDrawing';
 import { ShaftEditorPanel } from './components/ShaftEditorPanel';
 import { WbEditorPanel } from './components/WbWcEditors';
 import { CustomShaftPanel } from './components/CustomShaftPanel';
+import { LOCK_PORTAL_EVENT } from './components/AccessGate';
 
 const STORAGE_KEY = 'wa_progress_studio_v1';
 
@@ -1067,6 +1069,16 @@ export function App() {
             ) : (
               <PanelRightOpen className="h-3.5 w-3.5" />
             )}
+          </button>
+
+          {/* Lock Portal (Return to Login Gate) */}
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent(LOCK_PORTAL_EVENT))}
+            aria-label="Lock Portal"
+            title={isBn ? 'পোর্টাল লক করুন' : 'Lock Portal (Sign Out)'}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-rose-500/45 bg-rose-950/60 text-rose-300 hover:bg-rose-800/80 hover:text-white transition"
+          >
+            <Lock className="h-3.5 w-3.5" />
           </button>
         </div>
       </header>
