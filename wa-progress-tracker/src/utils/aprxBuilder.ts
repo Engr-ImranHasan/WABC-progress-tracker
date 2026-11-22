@@ -558,8 +558,8 @@ function makeTextSymbol(
             callout: {
               type: 'CIMBalloonCallout',
               balloonStyle: 'RoundedRectangle',
-              leaderTolerance: 0,
-              leaderOffset: 0,
+              leaderTolerance: 2,
+              leaderOffset: 2,
               margin: {
                 type: 'CIMTextMargin',
                 left: opts.callout.padH ?? 5,
@@ -1057,10 +1057,26 @@ function buildLandmarkLayerDef(opts: {
     },
     labelClasses: [
       makeMaplexLabelClass({
+        name: 'STP Outfall',
+        labelField: 'LABEL',
+        geomType: 'Point',
+        whereClause: "FEAT_TYPE = 'Landmark' AND REF_NODE = 'WC-27'",
+        neverRemove: true,
+        textSymbol: makeTextSymbol(9.2, [30, 58, 138], true, 'Center', false, {
+          callout: {
+            fill: [239, 246, 255, 96],
+            stroke: [29, 78, 216, 100],
+            strokeW: 1.5,
+            padH: 7,
+            padV: 3.5,
+          },
+        }),
+      }),
+      makeMaplexLabelClass({
         name: 'Landmarks',
         labelField: 'LABEL',
         geomType: 'Point',
-        whereClause: "FEAT_TYPE = 'Landmark'",
+        whereClause: "FEAT_TYPE = 'Landmark' AND REF_NODE <> 'WC-27'",
         neverRemove: true,
         textSymbol: makeTextSymbol(9.0, [15, 23, 42], true, 'Center', false, {
           callout: {
@@ -1106,6 +1122,43 @@ function buildLandmarkLayerDef(opts: {
       }),
     ],
   });
+}
+
+function buildBasemapReferenceLayer(uri: string) {
+  return {
+    type: 'CIMTiledServiceLayer',
+    name: 'World Light Gray Reference',
+    uRI: uri,
+    useSourceMetadata: true,
+    description: 'World Light Gray Reference (Roads & Place Labels)',
+    layerElevation: { type: 'CIMLayerElevationSurface' },
+    layerType: 'BasemapReference',
+    showLegends: false,
+    visibility: true,
+    displayCacheType: 'Permanent',
+    maxDisplayCacheAge: 5,
+    showPopups: false,
+    serviceLayerID: -1,
+    refreshRate: -1,
+    refreshRateUnit: 'esriTimeUnitsSeconds',
+    blendingMode: 'Alpha',
+    allowDrapingOnIntegratedMesh: true,
+    serviceConnection: {
+      type: 'CIMAGSServiceConnection',
+      description: 'BaseMapReference',
+      objectName: 'Canvas/World_Light_Gray_Reference',
+      objectType: 'MapServer',
+      url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer',
+      serverConnection: {
+        type: 'CIMInternetServerConnection',
+        anonymous: true,
+        hideUserProperty: true,
+        url: 'https://services.arcgisonline.com/ArcGIS/services',
+      },
+    },
+    transparentColor: rgbColor(0, 0, 0, 100),
+    backgroundColor: rgbColor(255, 255, 255, 0),
+  };
 }
 
 function buildBasemapLayer(uri: string) {
@@ -1918,9 +1971,11 @@ function buildPortraitLegendCard(
     out.push(makeTextGraphicElement('Leg_SPS_T', 'Golapbag SPS', x0 + 18, topY - 157, 8.0, [131, 24, 67], true, 'Left'));
 
     out.push(makeCircleGraphicElement('Leg_WO_Sw', x0 + 65, topY - 157, 3.6, [187, 247, 208, 100], [21, 128, 61, 100], 1.0));
+    out.push(makePolygonGraphicElement('Leg_WO_Tri', [[[x0 + 65, topY - 155.0], [x0 + 66.8, topY - 158.6], [x0 + 63.2, topY - 158.6], [x0 + 65, topY - 155.0]]], [22, 163, 74, 100], [21, 128, 61, 100], 0.4));
     out.push(makeTextGraphicElement('Leg_WO_T', 'Washout', x0 + 71, topY - 157, 8.0, [20, 83, 45], true, 'Left'));
 
     out.push(makeCircleGraphicElement('Leg_AV_Sw', x0 + 104, topY - 157, 3.6, [186, 230, 253, 100], [3, 105, 161, 100], 1.0));
+    out.push(makePolygonGraphicElement('Leg_AV_Tri', [[[x0 + 104, topY - 155.0], [x0 + 105.8, topY - 158.6], [x0 + 102.2, topY - 158.6], [x0 + 104, topY - 155.0]]], [2, 132, 199, 100], [3, 105, 161, 100], 0.4));
     out.push(makeTextGraphicElement('Leg_AV_T', 'Air Valve', x0 + 110, topY - 157, 8.0, [12, 74, 110], true, 'Left'));
 
     out.push(makeTextGraphicElement('Leg_EndJ', 'End Junction: Doyagonj Chowrasta (WD2 / WD3 / WC-1)', x0 + 8, y0 + 5.5, 7.6, [107, 33, 168], true, 'Left'));
@@ -2088,6 +2143,7 @@ function buildLandscapeBottomLegendBar(state: AppState, pageW: number): Array<Re
       out.push(makePolygonGraphicElement(`LegSps`, rectRing(it.x, 18, it.x + 8, 25), [251, 207, 232, 100], [157, 23, 77, 100], 1.2));
     } else {
       out.push(makeCircleGraphicElement(`LegApp`, it.x + 4, 21.5, 3.5, [186, 230, 253, 100], [3, 105, 161, 100], 1.0));
+      out.push(makePolygonGraphicElement(`LegAppTri`, [[[it.x + 4, 23.4], [it.x + 5.7, 19.9], [it.x + 2.3, 19.9], [it.x + 4, 23.4]]], [2, 132, 199, 100], [3, 105, 161, 100], 0.4));
     }
     out.push(makeTextGraphicElement(`LegT_${it.label}`, it.label, it.x + (it.type === 'ln' ? 18 : 11), 21.5, 8.2, [15, 23, 42], true, 'Left'));
   });
@@ -2405,7 +2461,7 @@ function buildLive3MapLayout(state: AppState, uri: string) {
     x1: 277,
     y1: 534,
     pts: waPts,
-    padFrac: 0.14,
+    padFrac: 0.17,
   });
   const wbFrame = makeMapFrameElement({
     name: 'WB Map Frame',
@@ -2415,7 +2471,7 @@ function buildLive3MapLayout(state: AppState, uri: string) {
     x1: 552,
     y1: 534,
     pts: wbPts,
-    padFrac: 0.14,
+    padFrac: 0.22,
   });
   const wcFrame = makeMapFrameElement({
     name: 'WC Map Frame',
@@ -2425,7 +2481,7 @@ function buildLive3MapLayout(state: AppState, uri: string) {
     x1: 826,
     y1: 534,
     pts: wcPts,
-    padFrac: 0.14,
+    padFrac: 0.17,
   });
 
   const elements: Array<Record<string, unknown>> = [
@@ -2732,13 +2788,21 @@ export async function buildWabcAprxUint8Array(
   );
 
   const bmWaUri = 'CIMPATH=map_wa/basemap.json';
+  const bmWaRefUri = 'CIMPATH=map_wa/basemap_ref.json';
   const bmWbUri = 'CIMPATH=map_wb/basemap.json';
+  const bmWbRefUri = 'CIMPATH=map_wb/basemap_ref.json';
   const bmWcUri = 'CIMPATH=map_wc/basemap.json';
+  const bmWcRefUri = 'CIMPATH=map_wc/basemap_ref.json';
   const bmAllUri = 'CIMPATH=map_wabc/basemap.json';
+  const bmAllRefUri = 'CIMPATH=map_wabc/basemap_ref.json';
   zip.file('map_wa/basemap.json', JSON.stringify(buildBasemapLayer(bmWaUri)));
+  zip.file('map_wa/basemap_ref.json', JSON.stringify(buildBasemapReferenceLayer(bmWaRefUri)));
   zip.file('map_wb/basemap.json', JSON.stringify(buildBasemapLayer(bmWbUri)));
+  zip.file('map_wb/basemap_ref.json', JSON.stringify(buildBasemapReferenceLayer(bmWbRefUri)));
   zip.file('map_wc/basemap.json', JSON.stringify(buildBasemapLayer(bmWcUri)));
+  zip.file('map_wc/basemap_ref.json', JSON.stringify(buildBasemapReferenceLayer(bmWcRefUri)));
   zip.file('map_wabc/basemap.json', JSON.stringify(buildBasemapLayer(bmAllUri)));
+  zip.file('map_wabc/basemap_ref.json', JSON.stringify(buildBasemapReferenceLayer(bmAllRefUri)));
 
   const spsRenderer = {
     type: 'CIMSimpleRenderer',
@@ -2973,9 +3037,13 @@ export async function buildWabcAprxUint8Array(
 
   const groundNodeId = allocNode('Layer', 'Map/ground_surface.json');
   const bmWaNodeId = allocNode('Layer', 'map_wa/basemap.json');
+  const bmWaRefNodeId = allocNode('Layer', 'map_wa/basemap_ref.json');
   const bmWbNodeId = allocNode('Layer', 'map_wb/basemap.json');
+  const bmWbRefNodeId = allocNode('Layer', 'map_wb/basemap_ref.json');
   const bmWcNodeId = allocNode('Layer', 'map_wc/basemap.json');
+  const bmWcRefNodeId = allocNode('Layer', 'map_wc/basemap_ref.json');
   const bmAllNodeId = allocNode('Layer', 'map_wabc/basemap.json');
+  const bmAllRefNodeId = allocNode('Layer', 'map_wabc/basemap_ref.json');
 
   defs.forEach((d) => {
     zip.file(d.path, JSON.stringify(d.def));
@@ -2995,6 +3063,7 @@ export async function buildWabcAprxUint8Array(
       'CIMPATH=map_wa/wa_sps.json',
       'CIMPATH=map_wa/wa_shafts.json',
       'CIMPATH=map_wa/wa_tunnels.json',
+      bmWaRefUri,
       bmWaUri,
     ],
     groundUri,
@@ -3004,7 +3073,7 @@ export async function buildWabcAprxUint8Array(
   const mapWaNodeId = allocNode(
     'Map',
     'map_wa/map.json',
-    `${groundNodeId},${nodeByPath('map_wa/wa_landmarks.json')},${nodeByPath('map_wa/wa_sps.json')},${nodeByPath('map_wa/wa_shafts.json')},${nodeByPath('map_wa/wa_tunnels.json')},${bmWaNodeId}`
+    `${groundNodeId},${nodeByPath('map_wa/wa_landmarks.json')},${nodeByPath('map_wa/wa_sps.json')},${nodeByPath('map_wa/wa_shafts.json')},${nodeByPath('map_wa/wa_tunnels.json')},${bmWaRefNodeId},${bmWaNodeId}`
   );
 
   const mapWbDef = buildMapDef({
@@ -3015,6 +3084,7 @@ export async function buildWabcAprxUint8Array(
       'CIMPATH=map_wb/wb_tip.json',
       'CIMPATH=map_wb/wb_nodes.json',
       'CIMPATH=map_wb/wb_pipeline.json',
+      bmWbRefUri,
       bmWbUri,
     ],
     groundUri,
@@ -3024,7 +3094,7 @@ export async function buildWabcAprxUint8Array(
   const mapWbNodeId = allocNode(
     'Map',
     'map_wb/map.json',
-    `${groundNodeId},${nodeByPath('map_wb/wb_landmarks.json')},${nodeByPath('map_wb/wb_tip.json')},${nodeByPath('map_wb/wb_nodes.json')},${nodeByPath('map_wb/wb_pipeline.json')},${bmWbNodeId}`
+    `${groundNodeId},${nodeByPath('map_wb/wb_landmarks.json')},${nodeByPath('map_wb/wb_tip.json')},${nodeByPath('map_wb/wb_nodes.json')},${nodeByPath('map_wb/wb_pipeline.json')},${bmWbRefNodeId},${bmWbNodeId}`
   );
 
   const mapWcDef = buildMapDef({
@@ -3034,6 +3104,7 @@ export async function buildWabcAprxUint8Array(
       'CIMPATH=map_wc/wc_landmarks.json',
       'CIMPATH=map_wc/wc_shafts.json',
       'CIMPATH=map_wc/wc_tunnels.json',
+      bmWcRefUri,
       bmWcUri,
     ],
     groundUri,
@@ -3043,7 +3114,7 @@ export async function buildWabcAprxUint8Array(
   const mapWcNodeId = allocNode(
     'Map',
     'map_wc/map.json',
-    `${groundNodeId},${nodeByPath('map_wc/wc_landmarks.json')},${nodeByPath('map_wc/wc_shafts.json')},${nodeByPath('map_wc/wc_tunnels.json')},${bmWcNodeId}`
+    `${groundNodeId},${nodeByPath('map_wc/wc_landmarks.json')},${nodeByPath('map_wc/wc_shafts.json')},${nodeByPath('map_wc/wc_tunnels.json')},${bmWcRefNodeId},${bmWcNodeId}`
   );
 
   const mapAllDef = buildMapDef({
@@ -3052,6 +3123,7 @@ export async function buildWabcAprxUint8Array(
     layerUris: [
       'CIMPATH=map_wabc/all_nodes.json',
       'CIMPATH=map_wabc/all_lines.json',
+      bmAllRefUri,
       bmAllUri,
     ],
     groundUri,
@@ -3061,7 +3133,7 @@ export async function buildWabcAprxUint8Array(
   allocNode(
     'Map',
     'map_wabc/map.json',
-    `${groundNodeId},${nodeByPath('map_wabc/all_nodes.json')},${nodeByPath('map_wabc/all_lines.json')},${bmAllNodeId}`
+    `${groundNodeId},${nodeByPath('map_wabc/all_nodes.json')},${nodeByPath('map_wabc/all_lines.json')},${bmAllRefNodeId},${bmAllNodeId}`
   );
 
   // Layouts (All styled cleanly to match GIS output sample.pdf)
