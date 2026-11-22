@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -14,6 +14,8 @@ import {
   CircleDashed,
   Search,
   Building2,
+  FileText,
+  MapPin,
 } from 'lucide-react';
 import {
   AppState,
@@ -28,23 +30,32 @@ import {
   calcDurationDays,
   calcElapsedDays,
   formatDateDisplay,
+  getCastingStatus,
   getManholeStatus,
-  getPartStatus,
   getPumpLowerStatus,
+  getRingStatus,
   getShaftCompletedLayersCount,
   getShaftStatus,
   getTunnelStatus,
   resizeShaftLayers,
 } from '../utils/calculations';
 import { DEFAULT_COLORS } from '../data/initialWaData';
+import {
+  createInitialWcData,
+  GOLAPBAG_SPS_COORD,
+  INITIAL_WA_GEO_NODES,
+} from '../data/wbcInitialData';
+import { applyKmlToWc, CustomMapPointsBox, MapConfigAndKmlBox } from './WbWcEditors';
 
 interface ShaftEditorPanelProps {
   state: AppState;
+  sectionTarget?: 'wa' | 'wc';
   selectedShaftId: string;
   onSelectShaft: (id: string) => void;
   onUpdateShaft: (id: string, patch: Partial<ShaftRecord>) => void;
   onUpdateState: (updater: (prev: AppState) => AppState) => void;
   focusSection?: 'shaft' | 'manhole' | 'tunnel';
+  requestedTab?: { tab: 'single' | 'table' | 'settings'; seq: number };
 }
 
 const LABELS = {
@@ -124,31 +135,52 @@ function StatusChip({ status }: { status: WorkStatus }) {
 
 export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
   state,
+  sectionTarget = 'wa',
   selectedShaftId,
   onSelectShaft,
   onUpdateShaft,
   onUpdateState,
+  requestedTab,
 }) => {
   const [activeTab, setActiveTab] = useState<'single' | 'table' | 'settings'>('single');
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | WorkStatus>('all');
   const [showBaselineOverride, setShowBaselineOverride] = useState(false);
 
+  // Smooth uncontrolled-while-typing drafts for tunnel Completed (%) and Completed (m)
+  const [pctDraft, setPctDraft] = useState<string | null>(null);
+  const [lenMDraft, setLenMDraft] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPctDraft(null);
+    setLenMDraft(null);
+  }, [selectedShaftId, sectionTarget]);
+
+  useEffect(() => {
+    if (requestedTab && requestedTab.seq > 0) {
+      setActiveTab(requestedTab.tab);
+    }
+  }, [requestedTab]);
+
   const lang: UiLang = state.uiLang;
   const L = LABELS[lang];
+  const isWc = sectionTarget === 'wc';
+  const shaftsList = isWc ? state.wc.shafts : state.shafts;
 
-  const isPumpSelected = selectedShaftId === 'PUMP_STATION';
-  const idx = state.shafts.findIndex((s) => s.id === selectedShaftId);
-  const shaft = state.shafts[idx >= 0 ? idx : 0];
+  const isPumpSelected = !isWc && selectedShaftId === 'PUMP_STATION';
+  const idx = shaftsList.findIndex((s) => s.id === selectedShaftId);
+  const shaft = shaftsList[idx >= 0 ? idx : 0];
   const prevShaft = isPumpSelected
-    ? state.shafts[state.shafts.length - 1]
+    ? shaftsList[shaftsList.length - 1]
     : idx > 0
-    ? state.shafts[idx - 1]
+    ? shaftsList[idx - 1]
     : null;
   const nextShaftId = isPumpSelected
     ? null
-    : idx < state.shafts.length - 1
-    ? state.shafts[idx + 1].id
+    : idx < shaftsList.length - 1
+    ? shaftsList[idx + 1].id
+    : isWc
+    ? null
     : 'PUMP_STATION';
 
   const updatePumpStation = (
@@ -162,7 +194,8 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
 
   const activeBaseline =
     state.viewMode === 'monthly' ? state.monthlyBaseline : state.weeklyBaseline;
-  const bSnap = activeBaseline.shafts[shaft.id];
+  const baselineMap = isWc ? (activeBaseline.wcShafts || {}) : activeBaseline.shafts;
+  const bSnap = baselineMap[shaft.id];
 
   const shStatus = getShaftStatus(shaft);
   const mhStatus = getManholeStatus(shaft);
@@ -192,8 +225,9 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
   };
 
   const handleTotalLayersChange = (newTotal: number) => {
-    const clamped = Math.max(6, Math.min(13, newTotal));
-    const newFlags = resizeShaftLayers(shaft.layerFlags, clamped);
+    const minL = shaft.sheetPileStyle ? 4 : 6;
+    const clamped = Math.max(minL, Math.min(13, newTotal));
+    const newFlags = resizeShaftLayers(shaft.layerFlags, clamped, minL);
     onUpdateShaft(shaft.id, {
       totalLayers: clamped,
       layerFlags: newFlags,
@@ -212,7 +246,8 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
     const targetKey = state.viewMode === 'monthly' ? 'monthlyBaseline' : 'weeklyBaseline';
     onUpdateState((prev) => {
       const base = prev[targetKey];
-      const existing = base.shafts[shaft.id] || {
+      const targetMap = isWc ? (base.wcShafts || {}) : base.shafts;
+      const existing = targetMap[shaft.id] || {
         layerFlags: Array(shaft.totalLayers).fill(false),
         bottomSlabDone: false,
         castingPct: 0,
@@ -227,27 +262,28 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
             )
           : existing.layerFlags;
 
+      const updatedSnap = {
+        ...existing,
+        layerFlags: nextLayers,
+        bottomSlabDone: patch.bottomSlabDone ?? existing.bottomSlabDone,
+        castingPct: patch.castingPct ?? existing.castingPct,
+        precastPct: patch.precastPct ?? existing.precastPct,
+        tunnelPct: patch.tunnelPct ?? existing.tunnelPct,
+      };
+
       return {
         ...prev,
         [targetKey]: {
           ...base,
-          shafts: {
-            ...base.shafts,
-            [shaft.id]: {
-              ...existing,
-              layerFlags: nextLayers,
-              bottomSlabDone: patch.bottomSlabDone ?? existing.bottomSlabDone,
-              castingPct: patch.castingPct ?? existing.castingPct,
-              precastPct: patch.precastPct ?? existing.precastPct,
-              tunnelPct: patch.tunnelPct ?? existing.tunnelPct,
-            },
-          },
+          ...(isWc
+            ? { wcShafts: { ...(base.wcShafts || {}), [shaft.id]: updatedSnap } }
+            : { shafts: { ...base.shafts, [shaft.id]: updatedSnap } }),
         },
       };
     });
   };
 
-  const filteredShafts = state.shafts.filter((s) => {
+  const filteredShafts = shaftsList.filter((s) => {
     const matchesSearch =
       !search.trim() ||
       s.id.toLowerCase().includes(search.trim().toLowerCase()) ||
@@ -274,7 +310,7 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
           }`}
         >
           <Layers className="h-3.5 w-3.5" />
-          {L.shaftEditor}
+          {isWc ? (lang === 'bn' ? 'WC Shaft এডিট' : 'Edit WC') : L.shaftEditor}
         </button>
         <button
           onClick={() => setActiveTab('table')}
@@ -285,7 +321,7 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
           }`}
         >
           <Table2 className="h-3.5 w-3.5" />
-          {L.bulkTable}
+          {lang === 'bn' ? `সব ${shaftsList.length}টি তালিকা` : `All ${shaftsList.length} Table`}
         </button>
         <button
           onClick={() => setActiveTab('settings')}
@@ -320,21 +356,23 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                 onChange={(e) => onSelectShaft(e.target.value)}
                 className="w-full rounded-md border border-blue-300 bg-white px-2.5 py-1 text-center text-sm font-bold text-blue-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                {state.shafts.map((s) => (
+                {shaftsList.map((s) => (
                   <option key={s.id} value={s.id}>
                     Shaft {s.id} → {s.nextId} ({s.pipeDia})
                   </option>
                 ))}
-                <option value="PUMP_STATION">
-                  ★ Pump Station (Golapbag SPS — 2 Parts)
-                </option>
+                {!isWc && (
+                  <option value="PUMP_STATION">
+                    ★ Pump Station (Golapbag SPS — 2 Parts)
+                  </option>
+                )}
               </select>
               {isPumpSelected ? (
                 <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
                   <span className="text-slate-500 font-medium">Lower:</span>
                   <StatusChip status={getPumpLowerStatus(state.pumpStation)} />
-                  <span className="text-slate-500 font-medium ml-1">Machine Room:</span>
-                  <StatusChip status={state.pumpStation.machineRoom.status} />
+                  <span className="text-slate-500 font-medium ml-1">Sinking:</span>
+                  <StatusChip status={state.pumpStation.sinkingStatus} />
                 </div>
               ) : (
                 <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
@@ -358,8 +396,8 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
             </button>
           </div>
 
-          {/* Quick Jump Pill to Pump Station */}
-          {!isPumpSelected && (
+          {/* Quick Jump Pill to Pump Station (WA only) OR WC Blank Status Notice (WC only) */}
+          {!isWc && !isPumpSelected && (
             <button
               onClick={() => onSelectShaft('PUMP_STATION')}
               className="flex w-full items-center justify-between rounded-md border border-teal-200 bg-teal-50/70 px-2.5 py-1.5 text-xs font-semibold text-teal-900 hover:bg-teal-100 transition"
@@ -372,6 +410,26 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
               </span>
               <span className="text-[11px] font-bold text-teal-700">Open →</span>
             </button>
+          )}
+          {isWc && (
+            <div className="flex items-center justify-between rounded-md border border-purple-200 bg-purple-50/70 px-2.5 py-1.5 text-[11px] text-purple-950">
+              <span className="font-semibold">
+                {lang === 'bn'
+                  ? 'WC সেকশন (২৭ Shaft): কাজ শুরু হলে নিচে থেকে আপডেট করুন'
+                  : 'WC Section (27 Shafts): Blank baseline — update anytime below'}
+              </span>
+              <button
+                onClick={() =>
+                  onUpdateState((prev) => ({
+                    ...prev,
+                    wc: createInitialWcData(),
+                  }))
+                }
+                className="rounded border border-purple-300 bg-white px-1.5 py-0.5 text-[10px] font-bold text-purple-800 hover:bg-purple-100"
+              >
+                Reset Blank
+              </button>
+            </div>
           )}
 
           {/* ==================== PUMP STATION 2-PART EDITOR ==================== */}
@@ -548,10 +606,64 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                   </div>
                 </div>
 
-                {/* 5 Layers Editor */}
+                {/* Sinking Status Control (Complete / On-going / Remaining) */}
+                <div className="rounded-md border border-teal-200 bg-teal-50/60 p-2 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-teal-950">
+                      {lang === 'bn' ? 'Sinking কাজের অবস্থা (Status)' : 'Sinking Work Status'}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {state.pumpStation.sinkingStatus !== 'complete' && (
+                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 border border-amber-300">
+                          Rem: {Math.max(0, Number((state.pumpStation.totalHeightM - state.pumpStation.sinkingCompletedM).toFixed(2)))}m
+                        </span>
+                      )}
+                      <StatusChip status={state.pumpStation.sinkingStatus} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(['complete', 'ongoing', 'remaining'] as WorkStatus[]).map((st) => {
+                      const active = state.pumpStation.sinkingStatus === st;
+                      const style =
+                        st === 'complete'
+                          ? active
+                            ? 'bg-emerald-600 text-white border-emerald-700'
+                            : 'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50'
+                          : st === 'ongoing'
+                          ? active
+                            ? 'bg-amber-400 text-slate-950 border-amber-600'
+                            : 'bg-white text-amber-700 border-amber-200 hover:bg-amber-50'
+                          : active
+                          ? 'bg-rose-600 text-white border-rose-700'
+                          : 'bg-white text-rose-700 border-rose-200 hover:bg-rose-50';
+                      return (
+                        <button
+                          key={st}
+                          onClick={() =>
+                            updatePumpStation((ps) => ({ ...ps, sinkingStatus: st }))
+                          }
+                          className={`rounded-md border px-2 py-1 text-[11px] font-bold capitalize transition ${style}`}
+                        >
+                          {st === 'ongoing' ? 'On-going' : st}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 5 Layers Editor (Bottom-to-Top Elevation: 5th Top down to 1st Bottom) */}
                 <div className="space-y-2">
-                  {state.pumpStation.layers.map((ly, li) => {
+                  <div className="text-[10px] font-semibold text-slate-500">
+                    {lang === 'bn'
+                      ? 'লেয়ার হিসাব নিচ থেকে উপরে (1st Layer = নিচে, 5th Layer = উপরে):'
+                      : 'Layers counted bottom-to-top (L1 at base → L5 at top):'}
+                  </div>
+                  {[4, 3, 2, 1, 0].map((li) => {
+                    const ly = state.pumpStation.layers[li];
+                    if (!ly) return null;
                     const dur = calcDurationDays(ly.sDate, ly.eDate);
+                    const posLabel =
+                      li === 0 ? 'Bottom Base' : li === 4 ? 'Top Slab' : `Level ${li + 1}`;
                     return (
                       <div
                         key={ly.name}
@@ -559,7 +671,10 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-xs font-bold text-slate-800">
-                            {ly.name}
+                            L{li + 1} · {ly.name}{' '}
+                            <span className="text-[10px] font-medium text-slate-500">
+                              ({posLabel})
+                            </span>
                           </span>
                           <div className="flex gap-1">
                             {(['complete', 'ongoing', 'remaining'] as WorkStatus[]).map((st) => {
@@ -637,6 +752,61 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                     );
                   })}
                 </div>
+
+                {/* Golapbag SPS Map Coordinates */}
+                {(() => {
+                  const sps = state.spsCoord || GOLAPBAG_SPS_COORD;
+                  return (
+                    <div className="rounded-md border border-pink-200 bg-pink-50/40 p-2 space-y-1.5">
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-pink-950">
+                        <MapPin className="h-3.5 w-3.5 text-pink-700" />
+                        {lang === 'bn'
+                          ? 'Golapbag SPS ম্যাপ কো-অর্ডিনেট'
+                          : 'Golapbag SPS Map Coordinates'}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[9px] text-slate-500">SPS Latitude</label>
+                          <input
+                            type="number"
+                            step="0.000001"
+                            aria-label="Golapbag SPS Latitude"
+                            value={sps.lat}
+                            onChange={(e) =>
+                              onUpdateState((prev) => ({
+                                ...prev,
+                                spsCoord: {
+                                  lat: Number(e.target.value) || sps.lat,
+                                  lon: (prev.spsCoord || sps).lon,
+                                },
+                              }))
+                            }
+                            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] text-slate-500">SPS Longitude</label>
+                          <input
+                            type="number"
+                            step="0.000001"
+                            aria-label="Golapbag SPS Longitude"
+                            value={sps.lon}
+                            onChange={(e) =>
+                              onUpdateState((prev) => ({
+                                ...prev,
+                                spsCoord: {
+                                  lat: (prev.spsCoord || sps).lat,
+                                  lon: Number(e.target.value) || sps.lon,
+                                },
+                              }))
+                            }
+                            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           ) : (
@@ -652,14 +822,20 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
               <StatusChip status={shStatus} />
             </div>
 
-            {/* Total Layers (6 to 13) + Completed Stepper */}
+            {/* Total Layers (4..13 for Sheet Pile, 6..13 for Wall Layers) + Completed Stepper */}
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-md bg-slate-50 p-2 border border-slate-200">
-                <div className="text-[11px] font-medium text-slate-600">{L.totalLayers}</div>
+                <div className="text-[11px] font-medium text-slate-600">
+                  {shaft.sheetPileStyle
+                    ? lang === 'bn'
+                      ? 'Sheet Pile ভাগ (নিচ→উপর)'
+                      : 'Sheet Pile Divisions'
+                    : L.totalLayers}
+                </div>
                 <div className="mt-1 flex items-center gap-1.5">
                   <button
                     onClick={() => handleTotalLayersChange(shaft.totalLayers - 1)}
-                    disabled={shaft.totalLayers <= 6}
+                    disabled={shaft.totalLayers <= (shaft.sheetPileStyle ? 4 : 6)}
                     className="h-7 w-7 rounded border border-slate-300 bg-white font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
                   >
                     -
@@ -701,10 +877,14 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
               </div>
             </div>
 
-            {/* Individual Clickable Layer Pills W1..WN */}
+            {/* Individual Clickable Layer/Sheet-Pile Pills */}
             <div>
               <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
-                <span>Click layers (W1–W{shaft.totalLayers}):</span>
+                <span>
+                  {shaft.sheetPileStyle
+                    ? `Sheet Pile (Bottom 1 → Top ${shaft.totalLayers}):`
+                    : `Click layers (W1–W${shaft.totalLayers}):`}
+                </span>
                 <div className="flex gap-2">
                   <button
                     onClick={() => {
@@ -735,6 +915,7 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                   const done = Boolean(shaft.layerFlags[li]);
                   const prevDone = Boolean(bSnap?.layerFlags?.[li]);
                   const isNewInPeriod = state.viewMode !== 'overall' && done && !prevDone;
+                  const pillLabel = shaft.sheetPileStyle ? `SP${li + 1}` : `W${li + 1}`;
                   return (
                     <button
                       key={li}
@@ -748,13 +929,13 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                       }`}
                       title={
                         isNewInPeriod
-                          ? `W${li + 1}: New this period!`
+                          ? `${pillLabel}: New this period!`
                           : done
-                          ? `W${li + 1}: Completed`
-                          : `W${li + 1}: Remaining`
+                          ? `${pillLabel}: Completed`
+                          : `${pillLabel}: Remaining`
                       }
                     >
-                      W{li + 1}
+                      {pillLabel}
                     </button>
                   );
                 })}
@@ -778,12 +959,23 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                 <input
                   type="checkbox"
                   checked={shaft.sheetPileStyle}
-                  onChange={(e) =>
-                    onUpdateShaft(shaft.id, { sheetPileStyle: e.target.checked })
-                  }
+                  onChange={(e) => {
+                    const nextSp = e.target.checked;
+                    if (nextSp && shaft.totalLayers > 4) {
+                      const done = shaft.layerFlags.slice(0, shaft.totalLayers).filter(Boolean).length;
+                      const divDone = Math.round((done / shaft.totalLayers) * 4);
+                      onUpdateShaft(shaft.id, {
+                        sheetPileStyle: true,
+                        totalLayers: 4,
+                        layerFlags: Array.from({ length: 4 }, (_, i) => i < divDone),
+                      });
+                    } else {
+                      onUpdateShaft(shaft.id, { sheetPileStyle: nextSp });
+                    }
+                  }}
                   className="h-3.5 w-3.5 rounded border-slate-300"
                 />
-                Strutted Wall
+                Sheet Pile (4 Divs)
               </label>
             </div>
 
@@ -894,16 +1086,32 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
 
             {/* Part 1: Lower In-situ Casting */}
             <div className="rounded-md border border-blue-100 bg-blue-50/40 p-2 space-y-1.5">
-              <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center justify-between text-xs gap-2">
                 <span className="font-semibold text-blue-900">{L.lowerCasting}</span>
-                <span className="font-bold text-blue-700">{shaft.castingPct}%</span>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={5}
+                    aria-label="Casting (%)"
+                    value={shaft.castingPct}
+                    onChange={(e) =>
+                      onUpdateShaft(shaft.id, {
+                        castingPct: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
+                      })
+                    }
+                    className="w-12 rounded border border-blue-300 bg-white px-1 py-0.5 text-right text-[11px] font-bold text-blue-800"
+                  />
+                  <span className="font-bold text-blue-700">%</span>
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <input
                   type="range"
                   min={0}
                   max={100}
-                  step={10}
+                  step={5}
                   value={shaft.castingPct}
                   onChange={(e) =>
                     onUpdateShaft(shaft.id, { castingPct: Number(e.target.value) })
@@ -931,7 +1139,7 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                 </div>
               </div>
               <div className="text-[10px] text-slate-500">
-                Status: <strong className="uppercase">{getPartStatus(shaft.castingPct)}</strong>
+                Status: <strong className="uppercase">{getCastingStatus(shaft)}</strong>
                 {state.viewMode !== 'overall' && bSnap && (
                   <span className="ml-2 text-amber-700">
                     (Prev: {bSnap.castingPct}% → +{Math.max(0, shaft.castingPct - bSnap.castingPct)}%)
@@ -942,16 +1150,32 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
 
             {/* Part 2: Upper Precast Ring */}
             <div className="rounded-md border border-sky-100 bg-sky-50/40 p-2 space-y-1.5">
-              <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center justify-between text-xs gap-2">
                 <span className="font-semibold text-sky-900">{L.upperPrecast}</span>
-                <span className="font-bold text-sky-700">{shaft.precastPct}%</span>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={5}
+                    aria-label="Precast Ring (%)"
+                    value={shaft.precastPct}
+                    onChange={(e) =>
+                      onUpdateShaft(shaft.id, {
+                        precastPct: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
+                      })
+                    }
+                    className="w-12 rounded border border-sky-300 bg-white px-1 py-0.5 text-right text-[11px] font-bold text-sky-800"
+                  />
+                  <span className="font-bold text-sky-700">%</span>
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <input
                   type="range"
                   min={0}
                   max={100}
-                  step={10}
+                  step={5}
                   value={shaft.precastPct}
                   onChange={(e) =>
                     onUpdateShaft(shaft.id, { precastPct: Number(e.target.value) })
@@ -979,7 +1203,7 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                 </div>
               </div>
               <div className="text-[10px] text-slate-500">
-                Status: <strong className="uppercase">{getPartStatus(shaft.precastPct)}</strong>
+                Status: <strong className="uppercase">{getRingStatus(shaft)}</strong>
                 {state.viewMode !== 'overall' && bSnap && (
                   <span className="ml-2 text-amber-700">
                     (Prev: {bSnap.precastPct}% → +{Math.max(0, shaft.precastPct - bSnap.precastPct)}%)
@@ -1054,27 +1278,31 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                   <option value="DN900">DN900</option>
                   <option value="DN1100">DN1100</option>
                   <option value="DN1600">DN1600</option>
+                  <option value="DN1800">DN1800</option>
+                  <option value="DN2400">DN2400</option>
+                  <option value="DN2600">DN2600</option>
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] font-semibold text-slate-500">
-                  {L.totalLen}
+                <label className="block text-[10px] font-semibold text-blue-700">
+                  {L.totalLen} (Editable)
                 </label>
                 <input
                   type="number"
                   step="0.1"
+                  min={0}
                   value={shaft.tunnelLengthM}
                   onChange={(e) =>
                     onUpdateShaft(shaft.id, {
-                      tunnelLengthM: Math.max(0.1, Number(e.target.value) || 0),
+                      tunnelLengthM: Math.max(0, Number(e.target.value) || 0),
                     })
                   }
-                  className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1 text-xs font-semibold"
+                  className="mt-0.5 w-full rounded border border-blue-300 bg-blue-50/40 px-2 py-1 text-xs font-bold text-slate-900"
                 />
               </div>
             </div>
 
-            {/* Completed % & Completed Meters synced */}
+            {/* Completed % & Completed Meters smoothly synced */}
             <div className="rounded-md border border-fuchsia-100 bg-fuchsia-50/40 p-2 space-y-2">
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -1083,14 +1311,31 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                   </label>
                   <input
                     type="number"
+                    step="any"
                     min={0}
                     max={100}
-                    value={shaft.tunnelPct}
-                    onChange={(e) =>
-                      onUpdateShaft(shaft.id, {
-                        tunnelPct: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
-                      })
+                    aria-label="Tunnel Completed (%)"
+                    value={
+                      pctDraft !== null
+                        ? pctDraft
+                        : String(Number(shaft.tunnelPct.toFixed(2)))
                     }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      setPctDraft(raw);
+                      setLenMDraft(null);
+                      if (raw.trim() === '') {
+                        onUpdateShaft(shaft.id, { tunnelPct: 0 });
+                        return;
+                      }
+                      const num = Number(raw);
+                      if (!Number.isNaN(num)) {
+                        onUpdateShaft(shaft.id, {
+                          tunnelPct: Number(Math.max(0, Math.min(100, num)).toFixed(4)),
+                        });
+                      }
+                    }}
+                    onBlur={() => setPctDraft(null)}
                     className="mt-0.5 w-full rounded border border-fuchsia-300 bg-white px-2 py-1 text-xs font-bold text-fuchsia-900"
                   />
                 </div>
@@ -1100,23 +1345,34 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                   </label>
                   <input
                     type="number"
-                    step="0.1"
+                    step="any"
                     min={0}
                     max={shaft.tunnelLengthM}
-                    value={Number(
-                      ((shaft.tunnelLengthM * shaft.tunnelPct) / 100).toFixed(1)
-                    )}
+                    aria-label="Tunnel Completed (m)"
+                    value={
+                      lenMDraft !== null
+                        ? lenMDraft
+                        : String(Number(((shaft.tunnelLengthM * shaft.tunnelPct) / 100).toFixed(2)))
+                    }
                     onChange={(e) => {
-                      const m = Math.max(
-                        0,
-                        Math.min(shaft.tunnelLengthM, Number(e.target.value) || 0)
-                      );
-                      const pct =
-                        shaft.tunnelLengthM > 0
-                          ? Math.round((m / shaft.tunnelLengthM) * 100)
-                          : 0;
-                      onUpdateShaft(shaft.id, { tunnelPct: pct });
+                      const raw = e.target.value;
+                      setLenMDraft(raw);
+                      setPctDraft(null);
+                      if (raw.trim() === '') {
+                        onUpdateShaft(shaft.id, { tunnelPct: 0 });
+                        return;
+                      }
+                      const parsed = Number(raw);
+                      if (!Number.isNaN(parsed)) {
+                        const m = Math.max(0, Math.min(shaft.tunnelLengthM, parsed));
+                        const pct =
+                          shaft.tunnelLengthM > 0
+                            ? Number(((m / shaft.tunnelLengthM) * 100).toFixed(4))
+                            : 0;
+                        onUpdateShaft(shaft.id, { tunnelPct: pct });
+                      }
                     }}
+                    onBlur={() => setLenMDraft(null)}
                     className="mt-0.5 w-full rounded border border-fuchsia-300 bg-white px-2 py-1 text-xs font-bold text-fuchsia-900"
                   />
                 </div>
@@ -1128,18 +1384,24 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                 max={100}
                 step={5}
                 value={shaft.tunnelPct}
-                onChange={(e) =>
-                  onUpdateShaft(shaft.id, { tunnelPct: Number(e.target.value) })
-                }
+                onChange={(e) => {
+                  setPctDraft(null);
+                  setLenMDraft(null);
+                  onUpdateShaft(shaft.id, { tunnelPct: Number(e.target.value) });
+                }}
                 className="w-full accent-fuchsia-600"
               />
               <div className="flex flex-wrap gap-1">
                 {[0, 20, 40, 50, 60, 80, 100].map((v) => (
                   <button
                     key={v}
-                    onClick={() => onUpdateShaft(shaft.id, { tunnelPct: v })}
+                    onClick={() => {
+                      setPctDraft(null);
+                      setLenMDraft(null);
+                      onUpdateShaft(shaft.id, { tunnelPct: v });
+                    }}
                     className={`rounded px-1.5 py-0.5 text-[10px] font-bold border ${
-                      shaft.tunnelPct === v
+                      Math.round(shaft.tunnelPct) === v
                         ? 'bg-fuchsia-600 text-white border-fuchsia-700'
                         : 'bg-white text-slate-600 border-slate-300'
                     }`}
@@ -1151,7 +1413,7 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
               {state.viewMode !== 'overall' && bSnap && (
                 <div className="text-[11px] font-medium text-amber-800">
                   Prev Baseline: {bSnap.tunnelPct}% → Added:{' '}
-                  <strong>+{Math.max(0, shaft.tunnelPct - bSnap.tunnelPct)}%</strong> (
+                  <strong>+{Math.max(0, shaft.tunnelPct - bSnap.tunnelPct).toFixed(1)}%</strong> (
                   +
                   {(
                     (shaft.tunnelLengthM *
@@ -1162,6 +1424,60 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                 </div>
               )}
             </div>
+
+            {/* WA Diameter-wise Micro-Tunnelling Total Length Override (DN900 / DN1100 / DN1600) */}
+            {!isWc && (
+              <details className="rounded-md border border-blue-200 bg-blue-50/40 p-2 text-[11px]">
+                <summary className="cursor-pointer font-bold text-blue-900">
+                  {lang === 'bn'
+                    ? 'WA মোট দৈর্ঘ্য এডিট (DN900 / DN1100 / DN1600)'
+                    : 'WA Dia Total Lengths (DN900 / DN1100 / DN1600)'}
+                </summary>
+                <div className="mt-2 space-y-1.5">
+                  {(['DN900', 'DN1100', 'DN1600'] as const).map((dia) => {
+                    const sumM = state.shafts
+                      .filter((x) => x.pipeDia === dia)
+                      .reduce((a, x) => a + x.tunnelLengthM, 0);
+                    const overrideVal = state.settings.waTunnelDiaTotalsM?.[dia];
+                    const effectiveM = overrideVal !== undefined && overrideVal > 0 ? overrideVal : sumM;
+                    return (
+                      <div key={dia} className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-slate-700 w-14">{dia}:</span>
+                        <input
+                          type="number"
+                          step="1"
+                          min={0}
+                          aria-label={`WA ${dia} Total Length (m)`}
+                          value={Number(effectiveM.toFixed(1))}
+                          onChange={(e) => {
+                            const val = Math.max(0, Number(e.target.value) || 0);
+                            onUpdateState((p) => ({
+                              ...p,
+                              settings: {
+                                ...p.settings,
+                                waTunnelDiaTotalsM: {
+                                  ...(p.settings.waTunnelDiaTotalsM || {}),
+                                  [dia]: val,
+                                },
+                              },
+                            }));
+                          }}
+                          className="w-24 rounded border border-blue-300 bg-white px-2 py-0.5 text-right font-bold text-slate-900"
+                        />
+                        <span className="text-[10px] font-semibold text-blue-800 w-16 text-right">
+                          {(effectiveM / 1000).toFixed(3)} km
+                        </span>
+                      </div>
+                    );
+                  })}
+                  <div className="text-[10px] text-slate-500 pt-0.5">
+                    {lang === 'bn'
+                      ? 'টিপস: সরাসরি মিটার (যেমন DN1600 = 2630) বসালে A1 রিপোর্ট ও Excel-এ সাথে সাথে আপডেট হবে।'
+                      : 'Updates A1 summary & Excel immediately (e.g. DN1600 = 2630 m = 2.63 km).'}
+                  </div>
+                </div>
+              </details>
+            )}
 
             {/* Tunnel Dates */}
             <div className="grid grid-cols-2 gap-2">
@@ -1203,6 +1519,177 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
               </span>
             </div>
           </div>
+
+          {/* SECTION 4: POINT MAP COORDINATES + ADD CUSTOM POINT */}
+          {(() => {
+            const waList =
+              state.waGeoNodes && state.waGeoNodes.length > 0
+                ? state.waGeoNodes
+                : INITIAL_WA_GEO_NODES;
+            const curGeo = isWc
+              ? state.wc.geoNodes.find((g) => g.id === shaft.id) || state.wc.geoNodes[0]
+              : waList.find((g) => g.id === shaft.id) || waList[0];
+            return (
+              <div className="space-y-3">
+                {curGeo && (
+                  <div className="rounded-lg border border-sky-200 bg-sky-50/40 p-3 shadow-xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h3 className="flex items-center gap-1.5 text-xs font-bold text-sky-950 uppercase tracking-wide">
+                        <MapPin className="h-3.5 w-3.5 text-sky-600" />
+                        {lang === 'bn'
+                          ? `${shaft.id} ম্যাপ কো-অর্ডিনেট (Auto Update)`
+                          : `${shaft.id} Map Coordinates (Auto Update)`}
+                      </h3>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-500">
+                          Latitude ({shaft.id})
+                        </label>
+                        <input
+                          type="number"
+                          step="0.000001"
+                          aria-label={`${shaft.id} Latitude`}
+                          value={curGeo.lat}
+                          onChange={(e) => {
+                            const nextLat = Number(e.target.value);
+                            if (!Number.isFinite(nextLat)) return;
+                            if (isWc) {
+                              onUpdateState((prev) => ({
+                                ...prev,
+                                wc: {
+                                  ...prev.wc,
+                                  geoNodes: prev.wc.geoNodes.map((g) =>
+                                    g.id === shaft.id ? { ...g, lat: nextLat } : g
+                                  ),
+                                },
+                              }));
+                            } else {
+                              onUpdateState((prev) => {
+                                const base =
+                                  prev.waGeoNodes && prev.waGeoNodes.length > 0
+                                    ? prev.waGeoNodes
+                                    : INITIAL_WA_GEO_NODES.map((x) => ({ ...x }));
+                                return {
+                                  ...prev,
+                                  waGeoNodes: base.map((g) =>
+                                    g.id === shaft.id ? { ...g, lat: nextLat } : g
+                                  ),
+                                };
+                              });
+                            }
+                          }}
+                          className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-500">
+                          Longitude ({shaft.id})
+                        </label>
+                        <input
+                          type="number"
+                          step="0.000001"
+                          aria-label={`${shaft.id} Longitude`}
+                          value={curGeo.lon}
+                          onChange={(e) => {
+                            const nextLon = Number(e.target.value);
+                            if (!Number.isFinite(nextLon)) return;
+                            if (isWc) {
+                              onUpdateState((prev) => ({
+                                ...prev,
+                                wc: {
+                                  ...prev.wc,
+                                  geoNodes: prev.wc.geoNodes.map((g) =>
+                                    g.id === shaft.id ? { ...g, lon: nextLon } : g
+                                  ),
+                                },
+                              }));
+                            } else {
+                              onUpdateState((prev) => {
+                                const base =
+                                  prev.waGeoNodes && prev.waGeoNodes.length > 0
+                                    ? prev.waGeoNodes
+                                    : INITIAL_WA_GEO_NODES.map((x) => ({ ...x }));
+                                return {
+                                  ...prev,
+                                  waGeoNodes: base.map((g) =>
+                                    g.id === shaft.id ? { ...g, lon: nextLon } : g
+                                  ),
+                                };
+                              });
+                            }
+                          }}
+                          className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-mono"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <CustomMapPointsBox
+                  section={isWc ? 'wc' : 'wa'}
+                  points={
+                    isWc ? state.wc.customPoints || [] : state.waCustomPoints || []
+                  }
+                  defaultLat={curGeo ? curGeo.lat : 23.735}
+                  defaultLon={curGeo ? curGeo.lon : 90.432}
+                  lang={lang}
+                  onAddPoint={(pt) => {
+                    if (isWc) {
+                      onUpdateState((p) => ({
+                        ...p,
+                        wc: {
+                          ...p.wc,
+                          customPoints: [...(p.wc.customPoints || []), pt],
+                        },
+                      }));
+                    } else {
+                      onUpdateState((p) => ({
+                        ...p,
+                        waCustomPoints: [...(p.waCustomPoints || []), pt],
+                      }));
+                    }
+                  }}
+                  onUpdatePoint={(id, patch) => {
+                    if (isWc) {
+                      onUpdateState((p) => ({
+                        ...p,
+                        wc: {
+                          ...p.wc,
+                          customPoints: (p.wc.customPoints || []).map((x) =>
+                            x.id === id ? { ...x, ...patch } : x
+                          ),
+                        },
+                      }));
+                    } else {
+                      onUpdateState((p) => ({
+                        ...p,
+                        waCustomPoints: (p.waCustomPoints || []).map((x) =>
+                          x.id === id ? { ...x, ...patch } : x
+                        ),
+                      }));
+                    }
+                  }}
+                  onDeletePoint={(id) => {
+                    if (isWc) {
+                      onUpdateState((p) => ({
+                        ...p,
+                        wc: {
+                          ...p.wc,
+                          customPoints: (p.wc.customPoints || []).filter((x) => x.id !== id),
+                        },
+                      }));
+                    } else {
+                      onUpdateState((p) => ({
+                        ...p,
+                        waCustomPoints: (p.waCustomPoints || []).filter((x) => x.id !== id),
+                      }));
+                    }
+                  }}
+                />
+              </div>
+            );
+          })()}
 
           {/* Optional Baseline Manual Adjustment (for Weekly/Monthly mode) */}
           {state.viewMode !== 'overall' && bSnap && (
@@ -1282,12 +1769,49 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
               )}
             </div>
           )}
+
+          {/* WC Navigation Map & KML/KMZ Upload when editing WC */}
+          {isWc && (
+            <MapConfigAndKmlBox
+              sectionLabel="WC"
+              settings={state.settings}
+              overlays={state.wc.customKmlLines || []}
+              lang={lang}
+              onUpdateSettings={(patch) =>
+                onUpdateState((p) => ({
+                  ...p,
+                  settings: { ...p.settings, ...patch },
+                }))
+              }
+              onAddOverlays={(lines) =>
+                onUpdateState((p) => ({
+                  ...p,
+                  wc: {
+                    ...p.wc,
+                    customKmlLines: [...(p.wc.customKmlLines || []), ...lines],
+                  },
+                }))
+              }
+              onClearOverlays={() =>
+                onUpdateState((p) => ({
+                  ...p,
+                  wc: { ...p.wc, customKmlLines: [] },
+                }))
+              }
+              onReplaceCoordinates={(pts) =>
+                onUpdateState((p) => ({
+                  ...p,
+                  wc: applyKmlToWc(p.wc, pts),
+                }))
+              }
+            />
+          )}
             </>
           )}
         </div>
       )}
 
-      {/* ==================== TAB 2: BULK QUICK TABLE (ALL 37) ==================== */}
+      {/* ==================== TAB 2: BULK QUICK TABLE ==================== */}
       {activeTab === 'table' && (
         <div className="flex flex-1 flex-col overflow-hidden p-3 space-y-2">
           <div className="flex items-center gap-2">
@@ -1297,7 +1821,7 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder={L.searchPlaceholder}
+                placeholder={isWc ? 'Search WC-1..WC-27...' : L.searchPlaceholder}
                 className="w-full rounded-md border border-slate-300 pl-8 pr-2 py-1.5 text-xs"
               />
             </div>
@@ -1306,7 +1830,7 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
               onChange={(e) => setFilterStatus(e.target.value as 'all' | WorkStatus)}
               className="rounded-md border border-slate-300 px-2 py-1.5 text-xs font-medium"
             >
-              <option value="all">All (37)</option>
+              <option value="all">All ({shaftsList.length})</option>
               <option value="ongoing">On-going</option>
               <option value="complete">Complete</option>
               <option value="remaining">Remaining</option>
@@ -1318,10 +1842,11 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
               <thead className="sticky top-0 bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                 <tr>
                   <th className="px-2 py-1.5">Shaft</th>
-                  <th className="px-1.5 py-1.5">Layers</th>
-                  <th className="px-1.5 py-1.5">Cast%</th>
-                  <th className="px-1.5 py-1.5">Ring%</th>
-                  <th className="px-1.5 py-1.5">Tun%</th>
+                  <th className="px-1 py-1.5">Layers</th>
+                  <th className="px-1 py-1.5">Cast%</th>
+                  <th className="px-1 py-1.5">Ring%</th>
+                  <th className="px-1 py-1.5">Len(m)</th>
+                  <th className="px-1 py-1.5">Tun%</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1339,10 +1864,10 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                       <td className="px-2 py-1.5 font-bold text-slate-900">
                         <div>{s.id}</div>
                         <div className="text-[9px] font-normal text-slate-500">
-                          {s.pipeDia} · {s.tunnelLengthM}m
+                          {s.pipeDia}
                         </div>
                       </td>
-                      <td className="px-1.5 py-1.5">
+                      <td className="px-1 py-1.5">
                         <input
                           type="number"
                           min={0}
@@ -1355,11 +1880,11 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                               layerFlags: Array.from({ length: s.totalLayers }, (_, i) => i < c),
                             });
                           }}
-                          className="w-11 rounded border border-slate-300 px-1 py-0.5 text-center font-semibold"
+                          className="w-9 rounded border border-slate-300 px-0.5 py-0.5 text-center font-semibold"
                         />
-                        <span className="ml-0.5 text-[10px] text-slate-400">/{s.totalLayers}</span>
+                        <span className="ml-0.5 text-[9px] text-slate-400">/{s.totalLayers}</span>
                       </td>
-                      <td className="px-1.5 py-1.5">
+                      <td className="px-1 py-1.5">
                         <input
                           type="number"
                           min={0}
@@ -1372,10 +1897,10 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                               castingPct: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
                             })
                           }
-                          className="w-11 rounded border border-slate-300 px-1 py-0.5 text-center font-semibold"
+                          className="w-10 rounded border border-slate-300 px-0.5 py-0.5 text-center font-semibold"
                         />
                       </td>
-                      <td className="px-1.5 py-1.5">
+                      <td className="px-1 py-1.5">
                         <input
                           type="number"
                           min={0}
@@ -1388,23 +1913,38 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                               precastPct: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
                             })
                           }
-                          className="w-11 rounded border border-slate-300 px-1 py-0.5 text-center font-semibold"
+                          className="w-10 rounded border border-slate-300 px-0.5 py-0.5 text-center font-semibold"
                         />
                       </td>
-                      <td className="px-1.5 py-1.5">
+                      <td className="px-1 py-1.5">
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.1"
+                          value={s.tunnelLengthM}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) =>
+                            onUpdateShaft(s.id, {
+                              tunnelLengthM: Math.max(0, Number(e.target.value) || 0),
+                            })
+                          }
+                          className="w-12 rounded border border-blue-200 bg-blue-50/40 px-0.5 py-0.5 text-center font-semibold"
+                        />
+                      </td>
+                      <td className="px-1 py-1.5">
                         <input
                           type="number"
                           min={0}
                           max={100}
-                          step={5}
-                          value={s.tunnelPct}
+                          step="any"
+                          value={Number(s.tunnelPct.toFixed(1))}
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) =>
                             onUpdateShaft(s.id, {
                               tunnelPct: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
                             })
                           }
-                          className="w-11 rounded border border-slate-300 px-1 py-0.5 text-center font-semibold"
+                          className="w-10 rounded border border-slate-300 px-0.5 py-0.5 text-center font-semibold"
                         />
                       </td>
                     </tr>
@@ -1416,17 +1956,103 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
         </div>
       )}
 
-      {/* ==================== TAB 3: SETTINGS, COLORS & HISTORY ==================== */}
+      {/* ==================== TAB 3: SETTINGS, TITLE BLOCK & HISTORY ==================== */}
       {activeTab === 'settings' && (
         <div className="flex-1 overflow-y-auto p-3 space-y-4 text-xs">
-          {/* A1 Sheet & Title Block */}
-          <div className="rounded-lg border border-slate-200 p-3 space-y-2">
-            <h3 className="font-bold text-slate-800 uppercase">A1 Sheet Setup & Title Block</h3>
+          {/* PROJECT DRAWING TITLE BLOCK EDITOR (ALL FIELDS EDITABLE) */}
+          <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3 space-y-2">
+            <h3 className="flex items-center gap-1.5 font-bold text-blue-950 uppercase">
+              <FileText className="h-3.5 w-3.5 text-blue-700" />
+              Project Drawing Title Block (All Editable)
+            </h3>
+
+            <div>
+              <label className="block text-[10px] font-semibold text-slate-600">Project Title (Top Header Subtitle)</label>
+              <input
+                type="text"
+                aria-label="Title Block Project Title"
+                value={state.settings.projectTitle}
+                onChange={(e) =>
+                  onUpdateState((p) => ({
+                    ...p,
+                    settings: { ...p.settings, projectTitle: e.target.value },
+                  }))
+                }
+                className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-semibold text-slate-600">Drawing Header Main Title</label>
+              <input
+                type="text"
+                aria-label="Drawing Header Main Title"
+                value={state.settings.sectionTitle}
+                onChange={(e) =>
+                  onUpdateState((p) => ({
+                    ...p,
+                    settings: { ...p.settings, sectionTitle: e.target.value },
+                  }))
+                }
+                className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
+              />
+            </div>
+
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-[10px] text-slate-500">Report Date</label>
+                <label className="block text-[10px] font-semibold text-slate-600">Client</label>
+                <input
+                  type="text"
+                  aria-label="Title Block Client"
+                  value={state.settings.clientName}
+                  onChange={(e) =>
+                    onUpdateState((p) => ({
+                      ...p,
+                      settings: { ...p.settings, clientName: e.target.value },
+                    }))
+                  }
+                  className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-600">Contractor</label>
+                <input
+                  type="text"
+                  aria-label="Title Block Contractor"
+                  value={state.settings.contractorName}
+                  onChange={(e) =>
+                    onUpdateState((p) => ({
+                      ...p,
+                      settings: { ...p.settings, contractorName: e.target.value },
+                    }))
+                  }
+                  className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-600">Title Block Section</label>
+                <input
+                  type="text"
+                  aria-label="Title Block Section"
+                  placeholder={state.activeSection.toUpperCase()}
+                  value={state.settings.customTitleBlockSection || ''}
+                  onChange={(e) =>
+                    onUpdateState((p) => ({
+                      ...p,
+                      settings: { ...p.settings, customTitleBlockSection: e.target.value },
+                    }))
+                  }
+                  className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-600">Date</label>
                 <input
                   type="date"
+                  aria-label="Title Block Date"
                   value={state.settings.reportDate}
                   onChange={(e) =>
                     onUpdateState((p) => ({
@@ -1434,28 +2060,172 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
                       settings: { ...p.settings, reportDate: e.target.value },
                     }))
                   }
-                  className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1"
+                  className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
                 />
               </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-[10px] text-slate-500">A1 Grid Layout</label>
-                <select
-                  value={state.settings.layoutMode}
+                <label className="block text-[10px] font-semibold text-slate-600">Prepared By</label>
+                <input
+                  type="text"
+                  aria-label="Title Block Prepared"
+                  value={state.settings.preparedBy}
                   onChange={(e) =>
                     onUpdateState((p) => ({
                       ...p,
-                      settings: {
-                        ...p.settings,
-                        layoutMode: e.target.value as '10col' | '12col',
-                      },
+                      settings: { ...p.settings, preparedBy: e.target.value },
                     }))
                   }
-                  className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1"
-                >
-                  <option value="10col">A1 Balanced (10 Cols)</option>
-                  <option value="12col">Original PDF (12 Cols)</option>
-                </select>
+                  className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
+                />
               </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-600">Contractor Representative</label>
+                <input
+                  type="text"
+                  aria-label="Title Block Contractor Representative"
+                  value={state.settings.checkedBy}
+                  onChange={(e) =>
+                    onUpdateState((p) => ({
+                      ...p,
+                      settings: { ...p.settings, checkedBy: e.target.value },
+                    }))
+                  }
+                  className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-2">
+                <label className="block text-[10px] font-semibold text-slate-600">Drawing No</label>
+                <input
+                  type="text"
+                  aria-label="Title Block Drawing No"
+                  value={state.settings.drawingNo}
+                  onChange={(e) =>
+                    onUpdateState((p) => ({
+                      ...p,
+                      settings: { ...p.settings, drawingNo: e.target.value },
+                    }))
+                  }
+                  className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-600">Rev</label>
+                <input
+                  type="text"
+                  aria-label="Title Block Revision"
+                  value={state.settings.revision}
+                  onChange={(e) =>
+                    onUpdateState((p) => ({
+                      ...p,
+                      settings: { ...p.settings, revision: e.target.value },
+                    }))
+                  }
+                  className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-semibold text-slate-600">Sheet Format Text</label>
+              <input
+                type="text"
+                aria-label="Title Block Sheet"
+                value={state.settings.sheetFormatLabel || 'ISO A1 (841 x 594 mm)'}
+                onChange={(e) =>
+                  onUpdateState((p) => ({
+                    ...p,
+                    settings: { ...p.settings, sheetFormatLabel: e.target.value },
+                  }))
+                }
+                className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
+              />
+            </div>
+          </div>
+
+          {/* WA Micro-Tunnelling Diameter Total Lengths */}
+          <div className="rounded-lg border border-fuchsia-200 bg-fuchsia-50/30 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-fuchsia-950 uppercase">
+                WA Micro-Tunnelling Total Lengths
+              </h3>
+              <button
+                onClick={() =>
+                  onUpdateState((p) => ({
+                    ...p,
+                    settings: { ...p.settings, waTunnelDiaTotalsM: {} },
+                  }))
+                }
+                className="text-[10px] font-bold text-fuchsia-700 hover:underline"
+              >
+                Use Raw Shaft Sum
+              </button>
+            </div>
+            <div className="space-y-1.5">
+              {(['DN900', 'DN1100', 'DN1600'] as const).map((dia) => {
+                const rawSum = state.shafts
+                  .filter((x) => x.pipeDia === dia)
+                  .reduce((a, x) => a + x.tunnelLengthM, 0);
+                const over = state.settings.waTunnelDiaTotalsM?.[dia];
+                const effective = over !== undefined && over > 0 ? over : rawSum;
+                return (
+                  <div key={dia} className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-slate-800 w-16">{dia}</span>
+                    <input
+                      type="number"
+                      step="1"
+                      min={0}
+                      value={Number(effective.toFixed(1))}
+                      onChange={(e) => {
+                        const v = Math.max(0, Number(e.target.value) || 0);
+                        onUpdateState((p) => ({
+                          ...p,
+                          settings: {
+                            ...p.settings,
+                            waTunnelDiaTotalsM: {
+                              ...(p.settings.waTunnelDiaTotalsM || {}),
+                              [dia]: v,
+                            },
+                          },
+                        }));
+                      }}
+                      className="w-24 rounded border border-fuchsia-300 bg-white px-2 py-1 text-right font-bold"
+                    />
+                    <span className="text-[11px] font-semibold text-fuchsia-900 w-20 text-right">
+                      = {(effective / 1000).toFixed(3)} km
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* A1 Layout & Map Options */}
+          <div className="rounded-lg border border-slate-200 p-3 space-y-2">
+            <h3 className="font-bold text-slate-800 uppercase">A1 Layout & Map Settings</h3>
+            <div>
+              <label className="block text-[10px] text-slate-500">A1 Grid Layout</label>
+              <select
+                value={state.settings.layoutMode}
+                onChange={(e) =>
+                  onUpdateState((p) => ({
+                    ...p,
+                    settings: {
+                      ...p.settings,
+                      layoutMode: e.target.value as '10col' | '12col',
+                    },
+                  }))
+                }
+                className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1"
+              >
+                <option value="10col">A1 Balanced (10 Cols)</option>
+                <option value="12col">Original PDF (12 Cols)</option>
+              </select>
             </div>
 
             <label className="flex items-center gap-2 pt-1 font-medium text-slate-700 cursor-pointer">
@@ -1473,50 +2243,38 @@ export const ShaftEditorPanel: React.FC<ShaftEditorPanelProps> = ({
               Show Pump Station on A1 Sheet
             </label>
 
-            <div>
-              <label className="block text-[10px] text-slate-500">Section Title</label>
-              <input
-                type="text"
-                value={state.settings.sectionTitle}
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <label className="flex items-center gap-2 font-medium text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={state.settings.showMapBackground}
+                  onChange={(e) =>
+                    onUpdateState((p) => ({
+                      ...p,
+                      settings: { ...p.settings, showMapBackground: e.target.checked },
+                    }))
+                  }
+                  className="h-4 w-4 rounded"
+                />
+                Navigation Map Tiles
+              </label>
+              <select
+                value={state.settings.mapStyle}
                 onChange={(e) =>
                   onUpdateState((p) => ({
                     ...p,
-                    settings: { ...p.settings, sectionTitle: e.target.value },
+                    settings: {
+                      ...p.settings,
+                      mapStyle: e.target.value as 'voyager' | 'light' | 'cad',
+                    },
                   }))
                 }
-                className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-[10px] text-slate-500">Prepared By</label>
-                <input
-                  type="text"
-                  value={state.settings.preparedBy}
-                  onChange={(e) =>
-                    onUpdateState((p) => ({
-                      ...p,
-                      settings: { ...p.settings, preparedBy: e.target.value },
-                    }))
-                  }
-                  className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] text-slate-500">Drawing No / Rev</label>
-                <input
-                  type="text"
-                  value={`${state.settings.drawingNo}`}
-                  onChange={(e) =>
-                    onUpdateState((p) => ({
-                      ...p,
-                      settings: { ...p.settings, drawingNo: e.target.value },
-                    }))
-                  }
-                  className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1"
-                />
-              </div>
+                className="w-full rounded border border-slate-300 px-2 py-1"
+              >
+                <option value="voyager">Map: Street Voyager</option>
+                <option value="light">Map: Clean Light</option>
+                <option value="cad">Map: Vector CAD Grid</option>
+              </select>
             </div>
           </div>
 

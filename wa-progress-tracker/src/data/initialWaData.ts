@@ -7,6 +7,12 @@ import {
   SheetSettings,
 } from '../types';
 import { createSnapshotFromState, LIVE_WORKSPACE_ID } from '../utils/calculations';
+import {
+  createInitialWbData,
+  createInitialWcData,
+  GOLAPBAG_SPS_COORD,
+  INITIAL_WA_GEO_NODES,
+} from './wbcInitialData';
 
 export const DEFAULT_COLORS: ColorPalette = {
   overallShaft: '#16c916',
@@ -18,19 +24,21 @@ export const DEFAULT_COLORS: ColorPalette = {
   prevWeekShaft: '#16a34a',
   prevWeekManhole: '#1d4ed8',
   prevWeekTunnel: '#a21caf',
-  thisWeekHighlight: '#f59e0b',
+  thisWeekHighlight: '#f97316',
 
   prevMonthShaft: '#15803d',
   prevMonthManhole: '#1e40af',
   prevMonthTunnel: '#86198f',
-  thisMonthHighlight: '#06b6d4',
+  thisMonthHighlight: '#f97316',
 };
 
 export const DEFAULT_SETTINGS: SheetSettings = {
   projectTitle: 'RECONSTRUCTION OF EASTERN TRUNK MAIN (PACKAGE No. WD2)',
-  sectionTitle: 'WA SECTION — PROGRESS REPORT (SHAFT, MANHOLE, MICRO-TUNNELLING & PUMP STATION)',
-  drawingNo: 'WA-PRG-A1-001',
-  revision: 'Rev-01',
+  sectionTitle: 'PROGRESS REPORT (SHAFT, MANHOLE, MICRO-TUNNELLING, OPEN CUT & PUMP STATION)',
+  customTitleBlockSection: '',
+  sheetFormatLabel: 'ISO A1 (841 x 594 mm)',
+  drawingNo: 'WABC-PRG-A1-001',
+  revision: 'Rev-02',
   reportDate: '2026-11-15',
   preparedBy: 'Site Engineering Team',
   checkedBy: 'Project Manager',
@@ -38,12 +46,18 @@ export const DEFAULT_SETTINGS: SheetSettings = {
   contractorName: 'CCECC-SafBon-SMEDI JV',
   layoutMode: '10col',
   showPumpStation: true,
+  showMapBackground: true,
+  mapStyle: 'voyager',
+  waTunnelDiaTotalsM: {
+    DN1600: 2630,
+  },
 };
 
 export const INITIAL_PUMP_STATION: PumpStationData = {
   totalHeightM: 19.95,
   castingCompleteM: 19.95,
   sinkingCompletedM: 13.8,
+  sinkingStatus: 'ongoing',
   layers: [
     { name: '1st Layer', sDate: '2025-11-25', eDate: '2026-02-08', status: 'complete' },
     { name: '2nd Layer', sDate: '2026-02-12', eDate: '2026-04-29', status: 'complete' },
@@ -1199,16 +1213,8 @@ export const INITIAL_SHAFTS: ShaftRecord[] = [
     "netHeightMm": 12857,
     "bottomSlabMm": 700,
     "sheetPileStyle": true,
-    "totalLayers": 12,
+    "totalLayers": 4,
     "layerFlags": [
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
       true,
       true,
       true,
@@ -1236,16 +1242,8 @@ export const INITIAL_SHAFTS: ShaftRecord[] = [
     "netHeightMm": 12857,
     "bottomSlabMm": 700,
     "sheetPileStyle": true,
-    "totalLayers": 12,
+    "totalLayers": 4,
     "layerFlags": [
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
       true,
       true,
       true,
@@ -1342,41 +1340,67 @@ export const INITIAL_SHAFTS: ShaftRecord[] = [
 
 export function createInitialAppState(): AppState {
   const pumpDone = INITIAL_PUMP_STATION.layers.map((l) => l.status === 'complete');
+  const wbInit = createInitialWbData();
+  const wcInit = createInitialWcData();
+
   const weeklyBaseline = createSnapshotFromState(
     INITIAL_SHAFTS,
     pumpDone,
     'Baseline PDF (08/11/2026)',
     '2026-11-08',
-    INITIAL_PUMP_STATION.machineRoom.status
+    INITIAL_PUMP_STATION.machineRoom.status,
+    INITIAL_PUMP_STATION.sinkingStatus,
+    wbInit,
+    wcInit
   );
   const monthlyBaseline = createSnapshotFromState(
     INITIAL_SHAFTS,
     pumpDone,
     'Last Monthly Meeting (31/10/2026)',
     '2026-10-31',
-    INITIAL_PUMP_STATION.machineRoom.status
+    INITIAL_PUMP_STATION.machineRoom.status,
+    INITIAL_PUMP_STATION.sinkingStatus,
+    wbInit,
+    wcInit
   );
 
   const initialSavedFile: SavedProgressFile = {
     id: 'file-initial-baseline',
     name: 'Baseline PDF Report (Initial)',
     date: '2026-11-08',
-    note: 'Extracted from initial A0 WABC PDF',
+    note: 'Extracted from initial A0 WABC PDF (WA, WB, WC)',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     shafts: JSON.parse(JSON.stringify(INITIAL_SHAFTS)),
     pumpStation: JSON.parse(JSON.stringify(INITIAL_PUMP_STATION)),
+    wb: JSON.parse(JSON.stringify(wbInit)),
+    wc: JSON.parse(JSON.stringify(wcInit)),
+    waGeoNodes: INITIAL_WA_GEO_NODES.map((n) => ({ ...n })),
+    spsCoord: { ...GOLAPBAG_SPS_COORD },
+    waCustomPoints: [],
   };
 
   return {
-    version: 2,
+    version: 3,
     lastSavedAt: new Date().toISOString(),
+    activeSection: 'wa',
     viewMode: 'overall',
     uiLang: 'bn',
     currentWeekLabel: 'Current Week (15 Nov 2026)',
     currentMonthLabel: 'Current Month (Nov 2026)',
     shafts: JSON.parse(JSON.stringify(INITIAL_SHAFTS)),
     pumpStation: JSON.parse(JSON.stringify(INITIAL_PUMP_STATION)),
+    wb: JSON.parse(JSON.stringify(wbInit)),
+    wc: JSON.parse(JSON.stringify(wcInit)),
+    waGeoNodes: INITIAL_WA_GEO_NODES.map((n) => ({ ...n })),
+    spsCoord: { ...GOLAPBAG_SPS_COORD },
+    waCustomPoints: [],
+    customView: {
+      section: 'wa',
+      selectedIds: ['WA-17', 'WA-18', 'WA-19', 'WA-20', 'WA-21', 'WA-22', 'WA-23', 'WA-24'],
+      showTunneling: true,
+      includePumpStation: false,
+    },
     savedFiles: [initialSavedFile],
     activeLoadedFileId: null,
     weeklyCompare: {
