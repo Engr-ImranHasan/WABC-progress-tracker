@@ -1136,42 +1136,17 @@ export const WaNavigationMapGroup: React.FC<WaMapProps> = ({
           );
         })}
 
-        {/* Original Surveyed Golapbag SPS Polygon + Compact SPS Marker */}
-        {(() => {
-          const spsPoly = GOLAPBAG_SPS_POLYGON.map((c) => viewport.project(c.lat, c.lon));
-          const spsPolyStr = spsPoly.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-          return (
-            <g>
-              <polygon
-                points={spsPolyStr}
-                fill="#fbcfe8"
-                fillOpacity={0.9}
-                stroke="#9d174d"
-                strokeWidth={1.5}
-                strokeLinejoin="round"
-              />
-              <rect
-                x={spsPt.x - 10}
-                y={spsPt.y - 6}
-                width={20}
-                height={12}
-                rx={2.5}
-                fill="#fbcfe8"
-                fillOpacity={0.85}
-                stroke="#9d174d"
-                strokeWidth={1.2}
-              />
-              <text x={spsPt.x} y={spsPt.y + 2.2} textAnchor="middle" fontSize={6.0} fontWeight="900" fill="#831843">
-                SPS
-              </text>
-            </g>
-          );
-        })()}
-
         {/* WA Shaft Nodes with 2D collision-free cartographic label placement */}
         {(() => {
+          const spsDeltaLat = sps.lat - GOLAPBAG_SPS_COORD.lat;
+          const spsDeltaLon = sps.lon - GOLAPBAG_SPS_COORD.lon;
+          const spsPoly = GOLAPBAG_SPS_POLYGON.map((c) =>
+            viewport.project(c.lat + spsDeltaLat, c.lon + spsDeltaLon)
+          );
+          const spsPolyStr = spsPoly.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+          const spsPolyMinY = Math.min(...spsPoly.map((p) => p.y));
           const blocked: LabelRectBox[] = [
-            { x: spsPt.x - 14, y: spsPt.y - 9, w: 28, h: 18 },
+            { x: spsPt.x - 12, y: spsPolyMinY - 12, w: 24, h: 20 },
             { x: mapX + mapW - 31, y: mapY + 4, w: 27, h: 27 },
             {
               x: mapX + 4,
@@ -1290,6 +1265,39 @@ export const WaNavigationMapGroup: React.FC<WaMapProps> = ({
                   <circle cx={pt.x} cy={pt.y} r={r * 0.48} fill={col.fill} />
                 </g>
               ))}
+
+              {/* Original Surveyed Golapbag SPS Polygon + Compact Top SPS Tag */}
+              <g>
+                <polygon
+                  points={spsPolyStr}
+                  fill="none"
+                  stroke="#ffffff"
+                  strokeWidth={2.5}
+                  strokeLinejoin="round"
+                />
+                <polygon
+                  points={spsPolyStr}
+                  fill="#fbcfe8"
+                  fillOpacity={0.85}
+                  stroke="#9d174d"
+                  strokeWidth={1.5}
+                  strokeLinejoin="round"
+                />
+                <rect
+                  x={spsPt.x - 9}
+                  y={spsPolyMinY - 10.5}
+                  width={18}
+                  height={9.5}
+                  rx={2}
+                  fill="#fdf2f8"
+                  fillOpacity={0.95}
+                  stroke="#9d174d"
+                  strokeWidth={1.0}
+                />
+                <text x={spsPt.x} y={spsPolyMinY - 3.6} textAnchor="middle" fontSize={5.4} fontWeight="900" fill="#831843">
+                  SPS
+                </text>
+              </g>
 
               {/* Draw collision-free WA labels + crisp hairline leaders */}
               {Array.from(placed.values()).map((lbl) => (

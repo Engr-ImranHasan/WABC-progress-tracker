@@ -641,8 +641,8 @@ export function sanitizeLoadedState(
     const lat = Number(c.lat);
     const lon = Number(c.lon);
     if (
-      (Math.abs(lat - 23.7195161) < 1e-6 && Math.abs(lon - 90.4326567) < 1e-6) ||
-      (Math.abs(lat - 23.72032) < 1e-6 && Math.abs(lon - 90.43282) < 1e-6)
+      (Math.abs(lat - 23.7195161) < 2e-5 && Math.abs(lon - 90.4326567) < 2e-5) ||
+      (Math.abs(lat - 23.72032) < 1e-4 && Math.abs(lon - 90.43282) < 1e-4)
     ) {
       return { ...GOLAPBAG_SPS_COORD };
     }

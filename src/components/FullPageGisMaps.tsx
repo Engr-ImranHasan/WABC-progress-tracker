@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import {
   DEFAULT_AIR_VALVE_COORD,
   DEFAULT_WASHOUT_COORD,
+  GOLAPBAG_SPS_COORD,
   GOLAPBAG_SPS_POLYGON,
 } from '../data/wbcInitialData';
 import {
@@ -1021,13 +1022,18 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
           const wa36Geo = geoById.get('WA-36');
           const wa35Pt = wa35Geo ? viewport.project(wa35Geo.lat, wa35Geo.lon) : null;
           const wa36Pt = wa36Geo ? viewport.project(wa36Geo.lat, wa36Geo.lon) : null;
-          const rawSpsPt = viewport.project(spsCoord.lat, spsCoord.lon);
-          const spsPt =
-            wa36Pt && Math.hypot(rawSpsPt.x - wa36Pt.x, rawSpsPt.y - wa36Pt.y) < 26
-              ? { x: wa36Pt.x + 2, y: wa36Pt.y - 32 }
-              : rawSpsPt;
+          const spsPt = viewport.project(spsCoord.lat, spsCoord.lon);
+          const spsDeltaLat = spsCoord.lat - GOLAPBAG_SPS_COORD.lat;
+          const spsDeltaLon = spsCoord.lon - GOLAPBAG_SPS_COORD.lon;
+          const waSpsPolyPts = GOLAPBAG_SPS_POLYGON.map((c) =>
+            viewport.project(c.lat + spsDeltaLat, c.lon + spsDeltaLon)
+          );
+          const waSpsMinX = Math.min(...waSpsPolyPts.map((pt) => pt.x));
+          const waSpsMaxX = Math.max(...waSpsPolyPts.map((pt) => pt.x));
+          const waSpsMinY = Math.min(...waSpsPolyPts.map((pt) => pt.y));
+          const waSpsMaxY = Math.max(...waSpsPolyPts.map((pt) => pt.y));
 
-          // Pre-seed WA square markers + SPS marker + WA-35->WA-36->SPS pipe corridor + custom points
+          // Pre-seed WA square markers + SPS polygon + WA-35->WA-36->SPS pipe corridor + custom points
           for (const gNode of waGeoNodes) {
             const p = viewport.project(gNode.lat, gNode.lon);
             occupied.push({ x0: p.x - 10, y0: p.y - 10, x1: p.x + 10, y1: p.y + 10 });
@@ -1049,10 +1055,10 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
             occupied.push({ x0: p.x - 11, y0: p.y - 11, x1: p.x + 11, y1: p.y + 11 });
           }
           occupied.push({
-            x0: spsPt.x - 18,
-            y0: spsPt.y - 12,
-            x1: spsPt.x + 18,
-            y1: spsPt.y + 12,
+            x0: Math.min(waSpsMinX - 4, spsPt.x - 16),
+            y0: waSpsMinY - 17,
+            x1: Math.max(waSpsMaxX + 4, spsPt.x + 16),
+            y1: waSpsMaxY + 4,
           });
 
           const zonePtDncc = viewport.project(23.7545, 90.4150);
@@ -1134,67 +1140,19 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
                 });
               })}
 
-              {/* Prominent Highlighted Golapbag SPS Callout (pointing to original SPS Polygon site) */}
+              {/* Prominent Highlighted Golapbag SPS Callout (pointing directly to surveyed SPS Polygon centroid) */}
               {renderHighlightedCallout(spsPt.x, spsPt.y, 'Golapbag Pump Station (SPS)', occupied, mapBounds, {
                 key: 'wa-sps-callout',
-                preferredSide: 'right',
-                baseOffsetX: 54,
+                preferredSide: 'left',
+                baseOffsetX: -275,
                 baseOffsetY: -22,
                 fontSize: 14.8,
-                stopDist: 22,
+                stopDist: 10,
                 bgFill: '#fdf2f8',
                 borderStroke: '#9d174d',
                 textFill: '#831843',
                 arrowStroke: '#9d174d',
               })}
-
-              {/* Original Surveyed Golapbag SPS Polygon (4 UTM Zone 46N corners) + Clear Label */}
-              {(() => {
-                const polyPts = GOLAPBAG_SPS_POLYGON.map((c) => viewport.project(c.lat, c.lon));
-                const polyStr = polyPts.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
-                const movedFromPoly = Math.hypot(spsPt.x - rawSpsPt.x, spsPt.y - rawSpsPt.y) > 4;
-                return (
-                  <g>
-                    {movedFromPoly && (
-                      <line
-                        x1={rawSpsPt.x}
-                        y1={rawSpsPt.y}
-                        x2={spsPt.x}
-                        y2={spsPt.y + 9}
-                        stroke="#9d174d"
-                        strokeWidth={1.3}
-                        strokeDasharray="2.5,2"
-                      />
-                    )}
-                    <polygon
-                      points={polyStr}
-                      fill="#fbcfe8"
-                      fillOpacity={0.9}
-                      stroke="#9d174d"
-                      strokeWidth={2.0}
-                      strokeLinejoin="round"
-                    >
-                      <title>Golapbag Pump Station (SPS) — Surveyed Polygon (4 corners)</title>
-                    </polygon>
-                    <g>
-                      <rect
-                        x={spsPt.x - 16}
-                        y={spsPt.y - 9}
-                        width={32}
-                        height={18}
-                        rx={3}
-                        fill="#fbcfe8"
-                        fillOpacity={0.92}
-                        stroke="#9d174d"
-                        strokeWidth={1.8}
-                      />
-                      <text x={spsPt.x} y={spsPt.y + 3.2} textAnchor="middle" fontSize={8.8} fontWeight="900" fill="#831843">
-                        SPS
-                      </text>
-                    </g>
-                  </g>
-                );
-              })()}
 
               {/* WA Shaft + Manhole Nodes & Non-Overlapping Labels */}
               {waGeoNodes.map((gNode, idx) => {
@@ -1225,9 +1183,9 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
                     : gNode.id === 'WA-16'
                     ? 'right'
                     : gNode.id === 'WA-35'
-                    ? 'top'
+                    ? 'left'
                     : gNode.id === 'WA-36'
-                    ? 'right'
+                    ? 'bottom'
                     : lmMatch
                     ? lmMatch.side === 'right'
                       ? 'left'
@@ -1303,6 +1261,46 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
                   </g>
                 );
               })}
+
+              {/* Original Surveyed Golapbag SPS Polygon (4 UTM Zone 46N corners) at exact surveyed position */}
+              {(() => {
+                const polyStr = waSpsPolyPts.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
+                return (
+                  <g>
+                    <polygon
+                      points={polyStr}
+                      fill="none"
+                      stroke="#ffffff"
+                      strokeWidth={3.6}
+                      strokeLinejoin="round"
+                    />
+                    <polygon
+                      points={polyStr}
+                      fill="#fbcfe8"
+                      fillOpacity={0.78}
+                      stroke="#9d174d"
+                      strokeWidth={2.0}
+                      strokeLinejoin="round"
+                    >
+                      <title>Golapbag Pump Station (SPS) — Surveyed Polygon (4 corners)</title>
+                    </polygon>
+                    <rect
+                      x={spsPt.x - 13}
+                      y={waSpsMinY - 14.5}
+                      width={26}
+                      height={12.5}
+                      rx={2.5}
+                      fill="#fdf2f8"
+                      fillOpacity={0.96}
+                      stroke="#9d174d"
+                      strokeWidth={1.3}
+                    />
+                    <text x={spsPt.x} y={waSpsMinY - 5.2} textAnchor="middle" fontSize={8.0} fontWeight="900" fill="#831843">
+                      SPS
+                    </text>
+                  </g>
+                );
+              })()}
 
               {/* Custom Added Map Points (WA) */}
               {renderCustomMapPoints(waCustomPoints, viewport, occupied, mapBounds)}
@@ -1592,7 +1590,11 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
 
               {/* Original Surveyed Golapbag SPS Polygon (4 UTM Zone 46N corners) */}
               {(() => {
-                const wbPolyPts = GOLAPBAG_SPS_POLYGON.map((c) => viewport.project(c.lat, c.lon));
+                const wbSpsDeltaLat = spsCoord.lat - GOLAPBAG_SPS_COORD.lat;
+                const wbSpsDeltaLon = spsCoord.lon - GOLAPBAG_SPS_COORD.lon;
+                const wbPolyPts = GOLAPBAG_SPS_POLYGON.map((c) =>
+                  viewport.project(c.lat + wbSpsDeltaLat, c.lon + wbSpsDeltaLon)
+                );
                 const wbPolyStr = wbPolyPts.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
                 const minYPoly = Math.min(...wbPolyPts.map((pt) => pt.y));
                 return (
