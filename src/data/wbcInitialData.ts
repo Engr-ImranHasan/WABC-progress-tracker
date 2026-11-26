@@ -43,7 +43,26 @@ export const RAW_WA_COORDS: Array<[string, number, number]> = [
 export const INITIAL_WA_GEO_NODES: Array<{ id: string; lat: number; lon: number }> =
   RAW_WA_COORDS.map(([id, lat, lon]) => ({ id, lat, lon }));
 
-export const GOLAPBAG_SPS_COORD = { lat: 23.72032, lon: 90.43282 };
+/**
+ * Original surveyed Golapbag Pump Station (SPS) boundary polygon (4 corners, WGS 84 / UTM Zone 46N -> WGS 84):
+ * 1. X = 238276.922, Y = 2625527.009
+ * 2. X = 238242.237, Y = 2625531.608
+ * 3. X = 238242.051, Y = 2625559.623
+ * 4. X = 238278.365, Y = 2625558.356
+ */
+export const GOLAPBAG_SPS_POLYGON: Array<{
+  lat: number;
+  lon: number;
+  utmX: number;
+  utmY: number;
+}> = [
+  { lat: 23.7194602, lon: 90.4329191, utmX: 238276.922, utmY: 2625527.009 },
+  { lat: 23.7194961, lon: 90.4325784, utmX: 238242.237, utmY: 2625531.608 },
+  { lat: 23.7197488, lon: 90.4325716, utmX: 238242.051, utmY: 2625559.623 },
+  { lat: 23.7197433, lon: 90.4329277, utmX: 238278.365, utmY: 2625558.356 },
+];
+
+export const GOLAPBAG_SPS_COORD = { lat: 23.7196121, lon: 90.4327492 };
 export const DEFAULT_WASHOUT_COORD = { lat: 23.7174873, lon: 90.43072 };
 export const DEFAULT_AIR_VALVE_COORD = { lat: 23.71053, lon: 90.4245374 };
 

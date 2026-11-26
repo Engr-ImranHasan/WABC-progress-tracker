@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import {
   DEFAULT_AIR_VALVE_COORD,
   DEFAULT_WASHOUT_COORD,
+  GOLAPBAG_SPS_POLYGON,
 } from '../data/wbcInitialData';
 import {
   AppState,
@@ -1133,7 +1134,7 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
                 });
               })}
 
-              {/* Prominent Highlighted Golapbag SPS Callout (positioned cleanly right of SPS above WA-36) */}
+              {/* Prominent Highlighted Golapbag SPS Callout (pointing to original SPS Polygon site) */}
               {renderHighlightedCallout(spsPt.x, spsPt.y, 'Golapbag Pump Station (SPS)', occupied, mapBounds, {
                 key: 'wa-sps-callout',
                 preferredSide: 'right',
@@ -1147,22 +1148,53 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
                 arrowStroke: '#9d174d',
               })}
 
-              {/* Golapbag SPS Building Box Marker (clearly above WA-36) */}
-              <g>
-                <rect
-                  x={spsPt.x - 17}
-                  y={spsPt.y - 10}
-                  width={34}
-                  height={20}
-                  rx={3}
-                  fill="#fbcfe8"
-                  stroke="#9d174d"
-                  strokeWidth={2.4}
-                />
-                <text x={spsPt.x} y={spsPt.y + 3.5} textAnchor="middle" fontSize={9.0} fontWeight="900" fill="#831843">
-                  SPS
-                </text>
-              </g>
+              {/* Original Surveyed Golapbag SPS Polygon (4 UTM Zone 46N corners) + Clear Label */}
+              {(() => {
+                const polyPts = GOLAPBAG_SPS_POLYGON.map((c) => viewport.project(c.lat, c.lon));
+                const polyStr = polyPts.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
+                const movedFromPoly = Math.hypot(spsPt.x - rawSpsPt.x, spsPt.y - rawSpsPt.y) > 4;
+                return (
+                  <g>
+                    {movedFromPoly && (
+                      <line
+                        x1={rawSpsPt.x}
+                        y1={rawSpsPt.y}
+                        x2={spsPt.x}
+                        y2={spsPt.y + 9}
+                        stroke="#9d174d"
+                        strokeWidth={1.3}
+                        strokeDasharray="2.5,2"
+                      />
+                    )}
+                    <polygon
+                      points={polyStr}
+                      fill="#fbcfe8"
+                      fillOpacity={0.9}
+                      stroke="#9d174d"
+                      strokeWidth={2.0}
+                      strokeLinejoin="round"
+                    >
+                      <title>Golapbag Pump Station (SPS) — Surveyed Polygon (4 corners)</title>
+                    </polygon>
+                    <g>
+                      <rect
+                        x={spsPt.x - 16}
+                        y={spsPt.y - 9}
+                        width={32}
+                        height={18}
+                        rx={3}
+                        fill="#fbcfe8"
+                        fillOpacity={0.92}
+                        stroke="#9d174d"
+                        strokeWidth={1.8}
+                      />
+                      <text x={spsPt.x} y={spsPt.y + 3.2} textAnchor="middle" fontSize={8.8} fontWeight="900" fill="#831843">
+                        SPS
+                      </text>
+                    </g>
+                  </g>
+                );
+              })()}
 
               {/* WA Shaft + Manhole Nodes & Non-Overlapping Labels */}
               {waGeoNodes.map((gNode, idx) => {
@@ -1558,22 +1590,40 @@ export const FullPageGisMapSheet: React.FC<FullPageGisMapProps> = ({
                 />
               )}
 
-              {/* Golapbag SPS Pink Box */}
-              <g>
-                <rect
-                  x={wbSpsRawPt.x - 22}
-                  y={wbSpsY}
-                  width={48}
-                  height={22}
-                  rx={3}
-                  fill="#fbcfe8"
-                  stroke="#9d174d"
-                  strokeWidth={2.2}
-                />
-                <text x={wbSpsRawPt.x + 2} y={wbSpsY + 14.5} textAnchor="middle" fontSize={9.0} fontWeight="800" fill="#831843">
-                  SPS
-                </text>
-              </g>
+              {/* Original Surveyed Golapbag SPS Polygon (4 UTM Zone 46N corners) */}
+              {(() => {
+                const wbPolyPts = GOLAPBAG_SPS_POLYGON.map((c) => viewport.project(c.lat, c.lon));
+                const wbPolyStr = wbPolyPts.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
+                const minYPoly = Math.min(...wbPolyPts.map((pt) => pt.y));
+                return (
+                  <g>
+                    <polygon
+                      points={wbPolyStr}
+                      fill="#fbcfe8"
+                      fillOpacity={0.85}
+                      stroke="#9d174d"
+                      strokeWidth={2.2}
+                      strokeLinejoin="round"
+                    >
+                      <title>Golapbag Pump Station (SPS) — Surveyed Polygon (4 corners)</title>
+                    </polygon>
+                    <rect
+                      x={wbSpsRawPt.x - 14}
+                      y={minYPoly - 16}
+                      width={28}
+                      height={14}
+                      rx={2.5}
+                      fill="#fdf2f8"
+                      fillOpacity={0.95}
+                      stroke="#9d174d"
+                      strokeWidth={1.3}
+                    />
+                    <text x={wbSpsRawPt.x} y={minYPoly - 5.5} textAnchor="middle" fontSize={8.5} fontWeight="900" fill="#831843">
+                      SPS
+                    </text>
+                  </g>
+                );
+              })()}
 
               {/* LARGE HIGHLIGHTED LIVE WASHOUT & AIR VALVE MARKERS + BOLD ARROWS */}
               <g>

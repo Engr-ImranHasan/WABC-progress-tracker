@@ -12,6 +12,7 @@ import {
 } from '../types';
 import {
   GOLAPBAG_SPS_COORD,
+  GOLAPBAG_SPS_POLYGON,
   INITIAL_WA_GEO_NODES,
   DEFAULT_AIR_VALVE_COORD,
   DEFAULT_WASHOUT_COORD,
@@ -164,7 +165,7 @@ interface ShpPolylineFeature {
 function writeShpHeader(
   view: DataView,
   wordLength: number,
-  shapeType: 1 | 3,
+  shapeType: 1 | 3 | 5,
   minX: number,
   minY: number,
   maxX: number,
@@ -173,7 +174,7 @@ function writeShpHeader(
   view.setInt32(0, 9994, false); // Big-endian file code
   view.setInt32(24, wordLength, false); // Big-endian length in 16-bit words
   view.setInt32(28, 1000, true); // Little-endian version
-  view.setInt32(32, shapeType, true); // 1 = Point, 3 = PolyLine
+  view.setInt32(32, shapeType, true); // 1 = Point, 3 = PolyLine, 5 = Polygon
   view.setFloat64(36, minX, true);
   view.setFloat64(44, minY, true);
   view.setFloat64(52, maxX, true);
@@ -255,7 +256,8 @@ function buildPointShapefileFiles(
 
 function buildPolylineShapefileFiles(
   features: ShpPolylineFeature[],
-  fields: DbfFieldSpec[]
+  fields: DbfFieldSpec[],
+  shapeType: 3 | 5 = 3
 ): {
   shp: Uint8Array;
   shx: Uint8Array;
@@ -263,14 +265,27 @@ function buildPolylineShapefileFiles(
   prj: string;
   cpg: string;
 } {
-  const valid = features.filter((f) => f.coords.length >= 2);
+  const minCoords = shapeType === 5 ? 3 : 2;
+  const normalized = features
+    .filter((f) => f.coords.length >= minCoords)
+    .map((f) => {
+      if (shapeType !== 5) return f;
+      const first = f.coords[0];
+      const last = f.coords[f.coords.length - 1];
+      const closed =
+        Math.abs(first[0] - last[0]) < 1e-9 && Math.abs(first[1] - last[1]) < 1e-9
+          ? f.coords
+          : [...f.coords, first];
+      return { ...f, coords: closed };
+    });
+
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
 
   let totalContentBytes = 0;
-  for (const f of valid) {
+  for (const f of normalized) {
     for (const [la, lo] of f.coords) {
       if (lo < minX) minX = lo;
       if (lo > maxX) maxX = lo;
@@ -287,20 +302,20 @@ function buildPolylineShapefileFiles(
     maxY = 23.77;
   }
 
-  const shpBytes = 100 + valid.length * 8 + totalContentBytes;
-  const shxBytes = 100 + valid.length * 8;
+  const shpBytes = 100 + normalized.length * 8 + totalContentBytes;
+  const shxBytes = 100 + normalized.length * 8;
 
   const shpBuf = new ArrayBuffer(shpBytes);
   const shpView = new DataView(shpBuf);
-  writeShpHeader(shpView, shpBytes / 2, 3, minX, minY, maxX, maxY);
+  writeShpHeader(shpView, shpBytes / 2, shapeType, minX, minY, maxX, maxY);
 
   const shxBuf = new ArrayBuffer(shxBytes);
   const shxView = new DataView(shxBuf);
-  writeShpHeader(shxView, shxBytes / 2, 3, minX, minY, maxX, maxY);
+  writeShpHeader(shxView, shxBytes / 2, shapeType, minX, minY, maxX, maxY);
 
   let shpOff = 100;
-  for (let i = 0; i < valid.length; i++) {
-    const f = valid[i];
+  for (let i = 0; i < normalized.length; i++) {
+    const f = normalized[i];
     const numPts = f.coords.length;
     const contentBytes = 48 + numPts * 16;
     const contentWords = contentBytes / 2;
@@ -322,7 +337,7 @@ function buildPolylineShapefileFiles(
 
     shpView.setInt32(shpOff, i + 1, false);
     shpView.setInt32(shpOff + 4, contentWords, false);
-    shpView.setInt32(shpOff + 8, 3, true); // PolyLine
+    shpView.setInt32(shpOff + 8, shapeType, true); // 3 = PolyLine, 5 = Polygon
     shpView.setFloat64(shpOff + 12, bMinX, true);
     shpView.setFloat64(shpOff + 20, bMinY, true);
     shpView.setFloat64(shpOff + 28, bMaxX, true);
@@ -342,7 +357,7 @@ function buildPolylineShapefileFiles(
 
   const dbf = buildDbfBytes(
     fields,
-    valid.map((f) => f.props)
+    normalized.map((f) => f.props)
   );
   return {
     shp: new Uint8Array(shpBuf),
@@ -351,6 +366,13 @@ function buildPolylineShapefileFiles(
     prj: WGS84_PRJ_WKT,
     cpg: 'UTF-8',
   };
+}
+
+function buildPolygonShapefileFiles(
+  features: ShpPolylineFeature[],
+  fields: DbfFieldSpec[]
+) {
+  return buildPolylineShapefileFiles(features, fields, 5);
 }
 
 function addShapefileSetToZip(
@@ -637,6 +659,11 @@ function toGeoJsonFeatureCollection(
         coords: Array<[number, number]>; // [[lon, lat], ...]
         properties: Record<string, unknown>;
       }
+    | {
+        geometryType: 'Polygon';
+        coords: Array<Array<[number, number]>>; // [[[lon, lat], ...]]
+        properties: Record<string, unknown>;
+      }
   >,
   layerName: string
 ) {
@@ -800,7 +827,7 @@ Coord   : GCS_WGS_1984 (EPSG:4326) | UTF-8
   01_WA_Section/
     - WA_Shafts.shp        (Point: 37 shafts WA-1..WA-36 + WA-24.1)
     - WA_Tunnels.shp       (Polyline: 37 micro-tunnel drives to Golapbag SPS)
-    - WA_Golapbag_SPS.shp  (Point: Golapbag Pump Station Lower + Upper Room)
+    - WA_Golapbag_SPS.shp  (Polygon: Surveyed Golapbag Pump Station Site Boundary)
     - WA_Landmarks.shp     (Point: WA Landmark Callouts + DNCC/DSCC Zone Badges)
 
   02_WB_Section/
@@ -901,7 +928,11 @@ export async function exportArcGisProPackage(state: AppState): Promise<void> {
     reportDate
   );
 
-  // WA Golapbag SPS Point
+  // WA Golapbag SPS Polygon (Original 4 surveyed UTM Zone 46N corners -> WGS 84 closed ring)
+  const spsPolyCoordsLatLon: Array<[number, number]> = [
+    ...GOLAPBAG_SPS_POLYGON.map((p): [number, number] => [p.lat, p.lon]),
+    [GOLAPBAG_SPS_POLYGON[0].lat, GOLAPBAG_SPS_POLYGON[0].lon],
+  ];
   const spsFeature: ShpPointFeature = {
     lat: spsCoord.lat,
     lon: spsCoord.lon,
@@ -920,6 +951,10 @@ export async function exportArcGisProPackage(state: AppState): Promise<void> {
       DMS_COORD: formatDmsLatLon(spsCoord.lat, spsCoord.lon),
       RPT_DATE: reportDate,
     },
+  };
+  const spsPolygonFeature: ShpPolylineFeature = {
+    coords: spsPolyCoordsLatLon,
+    props: spsFeature.props,
   };
 
   // WB Nodes + Appurtenances
@@ -1334,7 +1369,7 @@ export async function exportArcGisProPackage(state: AppState): Promise<void> {
   addShapefileSetToZip(
     zip,
     '01_WA_Section/WA_Golapbag_SPS',
-    buildPointShapefileFiles([spsFeature], SPS_POINT_FIELDS)
+    buildPolygonShapefileFiles([spsPolygonFeature], SPS_POINT_FIELDS)
   );
   addShapefileSetToZip(
     zip,
@@ -1415,9 +1450,12 @@ export async function exportArcGisProPackage(state: AppState): Promise<void> {
     toGeoJsonFeatureCollection(
       [
         {
-          geometryType: 'Point' as const,
-          coords: [spsFeature.lon, spsFeature.lat] as [number, number],
-          properties: spsFeature.props,
+          geometryType: 'Polygon' as const,
+          coords: [spsPolyCoordsLatLon.map(([la, lo]) => [lo, la] as [number, number])],
+          properties: {
+            ...spsFeature.props,
+            UTM_CORNERS: GOLAPBAG_SPS_POLYGON.map((p) => `(${p.utmX}, ${p.utmY})`).join(' | '),
+          },
         },
       ],
       'WA_Golapbag_SPS'

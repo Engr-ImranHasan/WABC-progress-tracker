@@ -772,7 +772,7 @@ function wbNodesUniqueRenderer() {
 function makeMaplexLabelClass(opts: {
   name: string;
   labelField: string;
-  geomType: 'Point' | 'Polyline';
+  geomType: 'Point' | 'Polyline' | 'Polygon';
   textSymbol: Record<string, unknown>;
   whereClause?: string;
   neverRemove?: boolean;
@@ -786,7 +786,12 @@ function makeMaplexLabelClass(opts: {
     ...(opts.whereClause ? { whereClause: opts.whereClause } : {}),
     maplexLabelPlacementProperties: {
       type: 'CIMMaplexLabelPlacementProperties',
-      featureType: opts.geomType === 'Point' ? 'Point' : 'Line',
+      featureType:
+        opts.geomType === 'Point'
+          ? 'Point'
+          : opts.geomType === 'Polygon'
+          ? 'Polygon'
+          : 'Line',
       avoidPolygonHoles: true,
       canOverrunFeature: true,
       canPlaceLabelOutsidePolygon: true,
@@ -794,7 +799,10 @@ function makeMaplexLabelClass(opts: {
       canStackLabel: true,
       centerLabelAnchorType: 'Symbol',
       connectionType: opts.geomType === 'Point' ? 'Unambiguous' : 'MinimizeLabels',
-      constrainOffset: opts.geomType === 'Point' ? 'NoConstraint' : 'AboveLine',
+      constrainOffset:
+        opts.geomType === 'Point' || opts.geomType === 'Polygon'
+          ? 'NoConstraint'
+          : 'AboveLine',
       contourAlignmentType: 'Page',
       contourLadderType: 'Straight',
       contourMaximumAngle: 90,
@@ -914,7 +922,7 @@ function buildFeatureLayerDef(opts: {
   dataset: string;
   displayField: string;
   labelField: string;
-  geomType: 'Point' | 'Polyline';
+  geomType: 'Point' | 'Polyline' | 'Polygon';
   renderer: Record<string, unknown>;
   showLabels?: boolean;
   labelClasses?: Array<Record<string, unknown>>;
@@ -2808,7 +2816,7 @@ export async function buildWabcAprxUint8Array(
     type: 'CIMSimpleRenderer',
     sampleSize: 10000,
     patch: 'Default',
-    symbol: spsSquareSymbol(14),
+    symbol: solidPolygonSymbol([251, 207, 232, 85], [157, 23, 77, 100], 1.8),
   };
 
   const tipRenderer = {
@@ -2865,7 +2873,7 @@ export async function buildWabcAprxUint8Array(
         dataset: 'WA_Golapbag_SPS',
         displayField: 'NAME',
         labelField: 'NAME',
-        geomType: 'Point',
+        geomType: 'Polygon',
         renderer: spsRenderer,
         showLabels: false,
       }),

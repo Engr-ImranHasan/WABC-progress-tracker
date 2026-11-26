@@ -15,6 +15,7 @@ import {
   DEFAULT_AIR_VALVE_COORD,
   DEFAULT_WASHOUT_COORD,
   GOLAPBAG_SPS_COORD,
+  GOLAPBAG_SPS_POLYGON,
   INITIAL_WA_GEO_NODES,
 } from '../data/wbcInitialData';
 import {
@@ -1135,22 +1136,37 @@ export const WaNavigationMapGroup: React.FC<WaMapProps> = ({
           );
         })}
 
-        {/* Golapbag SPS marker (compact diamond/pill so WA-34/35/36 stay unobstructed) */}
-        <g>
-          <rect
-            x={spsPt.x - 10}
-            y={spsPt.y - 6}
-            width={20}
-            height={12}
-            rx={2.5}
-            fill="#fbcfe8"
-            stroke="#9d174d"
-            strokeWidth={1.4}
-          />
-          <text x={spsPt.x} y={spsPt.y + 2.2} textAnchor="middle" fontSize={6.0} fontWeight="900" fill="#831843">
-            SPS
-          </text>
-        </g>
+        {/* Original Surveyed Golapbag SPS Polygon + Compact SPS Marker */}
+        {(() => {
+          const spsPoly = GOLAPBAG_SPS_POLYGON.map((c) => viewport.project(c.lat, c.lon));
+          const spsPolyStr = spsPoly.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+          return (
+            <g>
+              <polygon
+                points={spsPolyStr}
+                fill="#fbcfe8"
+                fillOpacity={0.9}
+                stroke="#9d174d"
+                strokeWidth={1.5}
+                strokeLinejoin="round"
+              />
+              <rect
+                x={spsPt.x - 10}
+                y={spsPt.y - 6}
+                width={20}
+                height={12}
+                rx={2.5}
+                fill="#fbcfe8"
+                fillOpacity={0.85}
+                stroke="#9d174d"
+                strokeWidth={1.2}
+              />
+              <text x={spsPt.x} y={spsPt.y + 2.2} textAnchor="middle" fontSize={6.0} fontWeight="900" fill="#831843">
+                SPS
+              </text>
+            </g>
+          );
+        })()}
 
         {/* WA Shaft Nodes with 2D collision-free cartographic label placement */}
         {(() => {
